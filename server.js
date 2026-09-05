@@ -2,69 +2,840 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
 
-const PORT=Number(process.env.PORT||3000);
-const MODEL=process.env.OPENAI_MODEL||'gpt-5.6-terra';
-const FREE=Number(process.env.FREE_DAILY_MESSAGES||5);
-const PRO=Number(process.env.PRO_DAILY_MESSAGES||100);
-if(!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
-const pool=new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_URL.includes('localhost')?false:{rejectUnauthorized:false}});
-const q=(text,params=[])=>pool.query(text,params);
-async function initDb(){
- await q(`CREATE TABLE IF NOT EXISTS users(id BIGSERIAL PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password_hash TEXT NOT NULL,plan TEXT NOT NULL DEFAULT 'free',created_at TEXT NOT NULL,stripe_customer_id TEXT,subscription_status TEXT);
- CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS messages(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS goals(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,title TEXT NOT NULL,progress INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'active',created_at TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS journal(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,title TEXT NOT NULL DEFAULT '',content TEXT NOT NULL,created_at TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS checkins(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,mood INTEGER NOT NULL,energy INTEGER NOT NULL,note TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS usage_daily(user_id BIGINT NOT NULL,day TEXT NOT NULL,count INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,day));`);
+const PORT = Number(process.env.PORT || 3000);
+const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-terra';
+const FREE = Number(process.env.FREE_DAILY_MESSAGES || 5);
+const PRO = Number(process.env.PRO_DAILY_MESSAGES || 100);
+
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+});
+const q = (text, params = []) => pool.query(text, params);
+
+async function initDb() {
+  await q(`
+    CREATE TABLE IF NOT EXISTS users(
+      id BIGSERIAL PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      plan TEXT NOT NULL DEFAULT 'free',
+      created_at TEXT NOT NULL,
+      stripe_customer_id TEXT,
+      subscription_status TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sessions(
+      token_hash TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS messages(
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS goals(
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      progress INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS journal(
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS checkins(
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      mood INTEGER NOT NULL,
+      energy INTEGER NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS usage_daily(
+      user_id BIGINT NOT NULL,
+      day TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(user_id, day)
+    );
+  `);
 }
 await initDb();
-const now=()=>new Date().toISOString(), today=()=>now().slice(0,10), h=t=>crypto.createHash('sha256').update(t).digest('hex');
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function passHash(p){const s=crypto.randomBytes(16).toString('hex');return s+':'+crypto.scryptSync(p,s,64).toString('hex')}
-function passOK(p,v){try{const [s,x]=v.split(':');return crypto.timingSafeEqual(Buffer.from(x,'hex'),crypto.scryptSync(p,s,64))}catch{return false}}
-function cookies(req){return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{const i=x.indexOf('=');return [x.slice(0,i),decodeURIComponent(x.slice(i+1))]}))}
-async function user(req){const t=cookies(req).jt_session;if(!t)return null;const r=await q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>$2',[h(t),now()]);return r.rows[0]||null}
-function publicUser(u){return u&&{id:Number(u.id),email:u.email,name:u.name,plan:u.plan,subscriptionStatus:u.subscription_status||null}}
-async function session(res,id){const t=crypto.randomBytes(32).toString('base64url'),exp=new Date(Date.now()+30*86400000);await q('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,$3)',[h(t),id,exp.toISOString()]);const sec=(process.env.COOKIE_SECURE==='true'||(process.env.APP_BASE_URL||'').startsWith('https://'))?'; Secure':'';res.setHeader('Set-Cookie',`jt_session=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${sec}`)}
-async function usage(id){const r=await q('SELECT count FROM usage_daily WHERE user_id=$1 AND day=$2',[id,today()]);return Number(r.rows[0]?.count||0)}
-async function inc(id){await q('INSERT INTO usage_daily(user_id,day,count) VALUES($1,$2,1) ON CONFLICT(user_id,day) DO UPDATE SET count=usage_daily.count+1',[id,today()])}
-function json(res,status,obj){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(obj))}
-function text(res,status,body,type='text/html; charset=utf-8'){res.writeHead(status,{'content-type':type});res.end(body)}
-async function body(req){return await new Promise((resolve,reject)=>{let s='';req.on('data',c=>{s+=c;if(s.length>1e6)req.destroy()});req.on('end',()=>{try{resolve(s?JSON.parse(s):{})}catch{resolve({})}});req.on('error',reject)})}
-const SYSTEM=`You are JT Coaching, a premium personal-development and life-coaching assistant for adults. Method: Clarity → Pattern → Choice → Action → Accountability. Be warm, direct, grounded and practical. Do not flatter or automatically agree. Distinguish facts, interpretations, fears, assumptions and values. Surface avoidance and conflicting incentives clearly but respectfully. Ask one strong question at a time when useful. Prefer concrete actions within 24–72 hours. You are a coach, not a therapist, physician, lawyer, financial adviser, or emergency service. Do not diagnose or present coaching as mental-health treatment. For high-stakes medical/legal/financial issues recommend qualified professional help. End substantive responses with “Next step:”.`;
-const crisis=/(suicid|kill myself|end my life|hurt myself|self[- ]?harm|harm myself|kill someone|hurt someone)/i;
-function demo(m,n){if(/decision|choose|choice|should i/i.test(m))return 'Separate this into four things: what you want, what you fear, what the facts support, and what each option costs. Which choice best fits who you want to be six months from now?\n\nNext step: write the two strongest options and one real cost of each.';if(/motivat|stuck|purpose|lost/i.test(m))return 'Identify what has actually stopped: energy, belief, structure, meaning, or willingness to tolerate discomfort. Those are different problems. Which one is most true here?\n\nNext step: choose one action under 20 minutes that creates evidence of movement today.';return `Let’s make this specific${n?' '+n:''}. What is in your control, what is outside it, and what are you avoiding because it is uncomfortable?\n\nNext step: name the single action that would make the next 24 hours meaningfully better.`}
 
-const CSS=`:root{--bg:#0b0e13;--panel:#151b27;--text:#f5f7fb;--muted:#99a4b5;--gold:#d6b969;--line:#2a3448}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:radial-gradient(circle at 20% 0,#1c2639 0,transparent 30%),var(--bg);color:var(--text)}button,input,textarea{font:inherit}.shell{max-width:1100px;margin:auto;padding:18px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.brand{display:flex;align-items:center;gap:10px;font-weight:800}.mark{width:42px;height:42px;border-radius:12px;border:1px solid #7d6935;display:grid;place-items:center;color:var(--gold)}nav{display:flex;gap:7px;flex-wrap:wrap}button{border:1px solid var(--line);background:transparent;color:var(--text);padding:10px 13px;border-radius:11px;cursor:pointer}.primary{background:var(--gold);color:#181309;border:0;font-weight:800}.card{background:linear-gradient(180deg,#171e2b,#111722);border:1px solid var(--line);border-radius:20px;padding:20px;margin-top:18px}.hero{display:grid;grid-template-columns:1.25fr .75fr;gap:16px}.eyebrow{color:var(--gold);text-transform:uppercase;letter-spacing:.15em;font-size:12px;font-weight:800}h1{font-size:clamp(38px,7vw,66px);line-height:.98;margin:10px 0}h2{margin:0 0 12px}.lead{color:#c3cad4;line-height:1.55;font-size:18px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat,.item{background:#0e141e;border:1px solid var(--line);border-radius:14px;padding:13px}.muted{color:var(--muted)}.section{display:none}.section.active{display:block}.chat{height:52vh;min-height:360px;overflow:auto}.msg{max-width:82%;padding:12px 14px;border-radius:14px;margin:9px 0;white-space:pre-wrap;line-height:1.5}.user{margin-left:auto;background:#273146}.assistant{background:#141c29;border:1px solid var(--line)}textarea,input{width:100%;background:#0e141e;border:1px solid var(--line);color:var(--text);padding:12px;border-radius:11px}.row{display:flex;gap:9px;align-items:center}.list{display:grid;gap:10px;margin-top:14px}.modal{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:18px}.modal.show{display:flex}.modal .card{max-width:460px;width:100%;margin:0}.footer{text-align:center;color:#748095;font-size:12px;padding:28px}.footer a{color:#9facbd}.install{display:none}@media(max-width:760px){.hero,.grid{grid-template-columns:1fr}.top{align-items:flex-start}.brand span{display:none}}`;
-const HTML=`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b0e13"><link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/app.css"><title>JT Coaching</title></head><body><div class="shell"><header class="top"><div class="brand"><div class="mark">JT</div><span>JT Coaching</span></div><nav><button data-v="home">Home</button><button data-v="coach">Coach</button><button data-v="goals">Goals</button><button data-v="journal">Journal</button><button data-v="plans">Plans</button><button data-v="account">Account</button></nav></header><main>
-<section id="home" class="section active"><div class="hero"><div class="card"><div class="eyebrow">Clarity • Pattern • Choice • Action • Accountability</div><h1>Move forward with intention.</h1><p class="lead">JT Coaching helps you think clearly, identify patterns, make better decisions and follow through.</p><div class="row"><button class="primary" data-v="coach">Start coaching</button><button id="install" class="install">Install JT Coaching</button></div><div class="grid" style="margin-top:16px"><div class="stat">Plan<br><strong id="plan">Free</strong></div><div class="stat">Messages today<br><strong id="use">0 / ${FREE}</strong></div><div class="stat">Active goals<br><strong id="goalCount">0</strong></div></div></div><div class="card"><div class="eyebrow">Daily check-in</div><h2>How are you showing up today?</h2><label>Mood 1–5</label><input id="mood" type="range" min="1" max="5" value="3"><label>Energy 1–5</label><input id="energy" type="range" min="1" max="5" value="3"><textarea id="note" rows="3" placeholder="Anything influencing today?"></textarea><button id="check" class="primary" style="margin-top:9px">Save check-in</button></div></div></section>
-<section id="coach" class="section"><div class="card"><div class="eyebrow">JT Coach</div><h2>Your coaching room</h2><div id="chat" class="chat"></div><div class="row"><textarea id="message" rows="2" placeholder="What would be most useful to work through?"></textarea><button id="send" class="primary">Send</button></div><p class="muted">Personal-development coaching only. Not psychotherapy, medical care, or emergency support.</p></div></section>
-<section id="goals" class="section"><div class="card"><div class="eyebrow">Direction</div><h2>Goals</h2><div class="row"><input id="goal" placeholder="Add a goal"><button id="addGoal" class="primary">Add</button></div><div id="goalsList" class="list"></div></div></section>
-<section id="journal" class="section"><div class="card"><div class="eyebrow">Reflection</div><h2>Journal</h2><input id="jtitle" placeholder="Title (optional)"><textarea id="jbody" rows="6" style="margin-top:8px" placeholder="What are you noticing?"></textarea><button id="saveJ" class="primary" style="margin-top:8px">Save entry</button><div id="journalList" class="list"></div></div></section>
-<section id="plans" class="section"><div class="hero"><div class="card"><div class="eyebrow">Free</div><h1 style="font-size:42px">$0</h1><p>${FREE} coaching messages/day<br>Up to 3 active goals<br>Journal and check-ins<br>Installable app</p></div><div class="card"><div class="eyebrow">JT Coaching Pro</div><h1 style="font-size:42px">${process.env.PRO_PRICE_LABEL||'$19/month'}</h1><p>Expanded coaching<br>Unlimited goals<br>Full history<br>Billing self-service</p><button id="upgrade" class="primary">Upgrade to Pro</button></div></div></section>
-<section id="account" class="section"><div class="card"><div class="eyebrow">Account</div><h2 id="acct">Your account</h2><p id="email" class="muted"></p><div class="row"><button id="export">Export data</button><button id="logout">Sign out</button><button id="delete">Delete account</button></div></div></section></main><footer class="footer"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/safety">Safety</a><br><br>© ${new Date().getFullYear()} JT Coaching</footer></div>
-<div id="auth" class="modal"><div class="card"><div class="mark">JT</div><h2>Welcome to JT Coaching</h2><p class="muted">Create a free account or sign in.</p><div class="row"><button id="signupTab">Create account</button><button id="loginTab">Sign in</button></div><input id="name" placeholder="First name" style="margin-top:9px"><input id="authEmail" type="email" placeholder="Email" style="margin-top:9px"><input id="pw" type="password" placeholder="Password (10+ characters)" style="margin-top:9px"><button id="authGo" class="primary" style="width:100%;margin-top:9px">Create free account</button><p id="authMsg"></p></div></div><script src="/app.js"></script></body></html>`;
-const JS=`let cfg={},data={},mode='signup',deferred=null;const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];async function api(u,o={}){const r=await fetch(u,{headers:{'content-type':'application/json'},...o});let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||'Request failed');return d}function show(v){$$('.section').forEach(x=>x.classList.toggle('active',x.id===v));scrollTo(0,0)}$$('[data-v]').forEach(b=>b.onclick=()=>show(b.dataset.v));function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}async function boot(){cfg=await api('/api/config');if(!cfg.user){$('#auth').classList.add('show');return}await load()}async function load(){data=await api('/api/data');render()}function render(){$('#plan').textContent=data.user.plan==='pro'?'Pro':'Free';$('#use').textContent=data.usedToday+' / '+data.limit;$('#goalCount').textContent=data.goals.filter(g=>g.status==='active').length;$('#acct').textContent=(data.user.name||'Your')+' account';$('#email').textContent=data.user.email+' · '+data.user.plan+' plan';$('#chat').innerHTML=(data.messages.length?data.messages:[{role:'assistant',content:'What would be most useful to work through today?'}]).map(m=>'<div class="msg '+m.role+'">'+esc(m.content)+'</div>').join('');$('#goalsList').innerHTML=data.goals.map(g=>'<div class="item"><strong>'+esc(g.title)+'</strong><div class="row"><input type="range" min="0" max="100" value="'+g.progress+'" onchange="goalProgress('+g.id+',this.value)"><span>'+g.progress+'%</span></div></div>').join('');$('#journalList').innerHTML=data.journal.map(j=>'<div class="item"><strong>'+esc(j.title||'Journal entry')+'</strong><p>'+esc(j.content)+'</p></div>').join('')}window.goalProgress=async(id,p)=>{await api('/api/goals/'+id,{method:'PATCH',body:JSON.stringify({progress:Number(p)})});load()};$('#send').onclick=async()=>{const m=$('#message').value.trim();if(!m)return;$('#message').value='';$('#chat').innerHTML+='<div class="msg user">'+esc(m)+'</div>';try{const d=await api('/api/coach',{method:'POST',body:JSON.stringify({message:m})});$('#chat').innerHTML+='<div class="msg assistant">'+esc(d.reply)+'</div>';load()}catch(e){alert(e.message)}};$('#addGoal').onclick=async()=>{const title=$('#goal').value.trim();if(!title)return;await api('/api/goals',{method:'POST',body:JSON.stringify({title})});$('#goal').value='';load()};$('#saveJ').onclick=async()=>{const content=$('#jbody').value.trim();if(!content)return;await api('/api/journal',{method:'POST',body:JSON.stringify({title:$('#jtitle').value,content})});$('#jtitle').value='';$('#jbody').value='';load()};$('#check').onclick=async()=>{await api('/api/checkins',{method:'POST',body:JSON.stringify({mood:+$('#mood').value,energy:+$('#energy').value,note:$('#note').value})});$('#note').value='';alert('Check-in saved')};$('#signupTab').onclick=()=>{mode='signup';$('#name').style.display='block';$('#authGo').textContent='Create free account'};$('#loginTab').onclick=()=>{mode='login';$('#name').style.display='none';$('#authGo').textContent='Sign in'};$('#authGo').onclick=async()=>{try{await api('/api/auth/'+mode,{method:'POST',body:JSON.stringify({name:$('#name').value,email:$('#authEmail').value,password:$('#pw').value})});location.reload()}catch(e){$('#authMsg').textContent=e.message}};$('#logout').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});location.reload()};$('#delete').onclick=async()=>{if(confirm('Permanently delete your JT Coaching account and stored data?')){await api('/api/account',{method:'DELETE'});location.reload()}};$('#export').onclick=()=>location.href='/api/export';$('#upgrade').onclick=async()=>{try{const d=await api('/api/billing/checkout',{method:'POST'});location.href=d.url}catch(e){alert(e.message)}};addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;$('#install').style.display='inline-block'});$('#install').onclick=async()=>{if(deferred){deferred.prompt();deferred=null}};if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js');boot();`;
+const now = () => new Date().toISOString();
+const today = () => now().slice(0, 10);
+const h = t => crypto.createHash('sha256').update(t).digest('hex');
 
-async function stripeRequest(pathname,params){const key=process.env.STRIPE_SECRET_KEY;if(!key)throw new Error('Billing not configured');const r=await fetch('https://api.stripe.com'+pathname,{method:'POST',headers:{authorization:'Basic '+Buffer.from(key+':').toString('base64'),'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(params)});const d=await r.json();if(!r.ok)throw new Error(d.error?.message||'Stripe error');return d}
+function passHash(p) {
+  const s = crypto.randomBytes(16).toString('hex');
+  return s + ':' + crypto.scryptSync(p, s, 64).toString('hex');
+}
+function passOK(p, v) {
+  try {
+    const [s, x] = v.split(':');
+    return crypto.timingSafeEqual(Buffer.from(x, 'hex'), crypto.scryptSync(p, s, 64));
+  } catch { return false; }
+}
+function cookies(req) {
+  return Object.fromEntries(
+    (req.headers.cookie || '')
+      .split(';')
+      .map(x => x.trim())
+      .filter(Boolean)
+      .map(x => {
+        const i = x.indexOf('=');
+        return [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
+      })
+  );
+}
+async function user(req) {
+  const t = cookies(req).jt_session;
+  if (!t) return null;
+  const r = await q(
+    'SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>$2',
+    [h(t), now()]
+  );
+  return r.rows[0] || null;
+}
+function publicUser(u) {
+  return u && {
+    id: Number(u.id),
+    email: u.email,
+    name: u.name,
+    plan: u.plan,
+    subscriptionStatus: u.subscription_status || null
+  };
+}
+async function session(res, id) {
+  const t = crypto.randomBytes(32).toString('base64url');
+  const exp = new Date(Date.now() + 30 * 86400000);
+  await q('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,$3)', [h(t), id, exp.toISOString()]);
+  const sec = (process.env.COOKIE_SECURE === 'true' || (process.env.APP_BASE_URL || '').startsWith('https://')) ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `jt_session=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${sec}`);
+}
+async function usage(id) {
+  const r = await q('SELECT count FROM usage_daily WHERE user_id=$1 AND day=$2', [id, today()]);
+  return Number(r.rows[0]?.count || 0);
+}
+async function inc(id) {
+  await q(
+    'INSERT INTO usage_daily(user_id,day,count) VALUES($1,$2,1) ON CONFLICT(user_id,day) DO UPDATE SET count=usage_daily.count+1',
+    [id, today()]
+  );
+}
+function json(res, status, obj) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(obj));
+}
+function text(res, status, body, type = 'text/html; charset=utf-8') {
+  res.writeHead(status, { 'content-type': type });
+  res.end(body);
+}
+async function body(req) {
+  return await new Promise((resolve, reject) => {
+    let s = '';
+    req.on('data', c => {
+      s += c;
+      if (s.length > 1e6) req.destroy();
+    });
+    req.on('end', () => {
+      try { resolve(s ? JSON.parse(s) : {}); } catch { resolve({}); }
+    });
+    req.on('error', reject);
+  });
+}
 
-const server=http.createServer(async(req,res)=>{try{const url=new URL(req.url,'http://x');if(req.method==='GET'&&url.pathname==='/')return text(res,200,HTML);if(req.method==='GET'&&url.pathname==='/app.css')return text(res,200,CSS,'text/css; charset=utf-8');if(req.method==='GET'&&url.pathname==='/app.js')return text(res,200,JS,'application/javascript; charset=utf-8');if(req.method==='GET'&&url.pathname==='/manifest.webmanifest')return json(res,200,{name:'JT Coaching',short_name:'JT Coaching',start_url:'/',display:'standalone',background_color:'#0b0e13',theme_color:'#0b0e13',icons:[]});if(req.method==='GET'&&url.pathname==='/sw.js')return text(res,200,"const C='jt-v1';self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/app.css','/app.js','/manifest.webmanifest']))));self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&!new URL(e.request.url).pathname.startsWith('/api/'))e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})",'application/javascript');
-if(req.method==='GET'&&['/privacy','/terms','/safety'].includes(url.pathname)){const title=url.pathname.slice(1);const copy=title==='privacy'?'JT Coaching stores account details, coaching conversations, goals, journal entries and check-ins to provide the service. Payment card data is handled by Stripe. Users can export or delete their stored data. This is a starter policy and must be legally reviewed before broad public launch.':title==='terms'?'JT Coaching is personal-development software, not psychotherapy, medical care, legal advice, financial advice or emergency services. Users remain responsible for their decisions. Free features may have usage limits and paid subscriptions renew until cancelled. These starter terms require legal review before public sales.':'JT Coaching supports adult personal development. It is not a therapist, psychologist, physician, crisis line or emergency service. If you or someone else may be in immediate danger, contact local emergency services or an appropriate crisis service and seek human support.';return text(res,200,`<!doctype html><meta name=viewport content='width=device-width'><link rel=stylesheet href=/app.css><div class=shell><div class=card><div class=eyebrow>${title}</div><h1>${title[0].toUpperCase()+title.slice(1)}</h1><p>${copy}</p><p><a href=/ style='color:#d6b969'>← Back to JT Coaching</a></p></div></div>`)}
-if(url.pathname==='/api/config'&&req.method==='GET'){const u=await user(req);return json(res,200,{user:publicUser(u),freeDailyMessages:FREE,proDailyMessages:PRO,proPrice:process.env.PRO_PRICE_LABEL||'$19/month',aiConfigured:!!process.env.OPENAI_API_KEY,stripeConfigured:!!(process.env.STRIPE_SECRET_KEY&&process.env.STRIPE_PRICE_ID)})}
-if(url.pathname==='/api/auth/signup'&&req.method==='POST'){const b=await body(req),email=String(b.email||'').trim().toLowerCase(),name=String(b.name||'').trim().slice(0,80),p=String(b.password||'');if(!/^\S+@\S+\.\S+$/.test(email))return json(res,400,{error:'Enter a valid email.'});if(p.length<10)return json(res,400,{error:'Use at least 10 characters.'});try{const r=await q('INSERT INTO users(email,name,password_hash,created_at) VALUES($1,$2,$3,$4) RETURNING id',[email,name,passHash(p),now()]);await session(res,Number(r.rows[0].id));return json(res,200,{ok:true})}catch{return json(res,409,{error:'That email already has an account.'})}}
-if(url.pathname==='/api/auth/login'&&req.method==='POST'){const b=await body(req),ur=await q('SELECT * FROM users WHERE email=$1',[String(b.email||'').trim().toLowerCase()]),u=ur.rows[0];if(!u||!passOK(String(b.password||''),u.password_hash))return json(res,401,{error:'Incorrect email or password.'});await session(res,u.id);return json(res,200,{ok:true})}
-if(url.pathname==='/api/auth/logout'&&req.method==='POST'){const t=cookies(req).jt_session;if(t)await q('DELETE FROM sessions WHERE token_hash=$1',[h(t)]);res.setHeader('Set-Cookie','jt_session=; Path=/; Max-Age=0');return json(res,200,{ok:true})}
-const u=await user(req);if(url.pathname.startsWith('/api/')&&!u)return json(res,401,{error:'Please sign in.'});
-if(url.pathname==='/api/data'&&req.method==='GET'){const [g,j,c,m,usedToday]=await Promise.all([q('SELECT * FROM goals WHERE user_id=$1 ORDER BY id DESC',[u.id]),q('SELECT * FROM journal WHERE user_id=$1 ORDER BY id DESC LIMIT 100',[u.id]),q('SELECT * FROM checkins WHERE user_id=$1 ORDER BY id DESC LIMIT 60',[u.id]),q('SELECT role,content,created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 30',[u.id]),usage(u.id)]);return json(res,200,{user:publicUser(u),goals:g.rows,journal:j.rows,checkins:c.rows,messages:m.rows.reverse(),usedToday,limit:u.plan==='pro'?PRO:FREE})}
-if(url.pathname==='/api/goals'&&req.method==='POST'){const b=await body(req),title=String(b.title||'').trim().slice(0,180);if(!title)return json(res,400,{error:'Goal required.'});const cr=await q("SELECT COUNT(*)::int n FROM goals WHERE user_id=$1 AND status='active'",[u.id]);if(u.plan!=='pro'&&cr.rows[0].n>=3)return json(res,403,{error:'Free accounts can have up to 3 active goals.'});await q('INSERT INTO goals(user_id,title,created_at) VALUES($1,$2,$3)',[u.id,title,now()]);return json(res,200,{ok:true})}
-if(url.pathname.startsWith('/api/goals/')&&req.method==='PATCH'){const id=Number(url.pathname.split('/').pop()),b=await body(req),p=Math.max(0,Math.min(100,Number(b.progress)||0));await q('UPDATE goals SET progress=$1,status=$2 WHERE id=$3 AND user_id=$4',[p,p>=100?'complete':'active',id,u.id]);return json(res,200,{ok:true})}
-if(url.pathname==='/api/journal'&&req.method==='POST'){const b=await body(req),content=String(b.content||'').trim().slice(0,12000);if(!content)return json(res,400,{error:'Journal entry required.'});await q('INSERT INTO journal(user_id,title,content,created_at) VALUES($1,$2,$3,$4)',[u.id,String(b.title||'').slice(0,180),content,now()]);return json(res,200,{ok:true})}
-if(url.pathname==='/api/checkins'&&req.method==='POST'){const b=await body(req);await q('INSERT INTO checkins(user_id,mood,energy,note,created_at) VALUES($1,$2,$3,$4,$5)',[u.id,Math.max(1,Math.min(5,+b.mood||3)),Math.max(1,Math.min(5,+b.energy||3)),String(b.note||'').slice(0,1000),now()]);return json(res,200,{ok:true})}
-if(url.pathname==='/api/coach'&&req.method==='POST'){const b=await body(req),m=String(b.message||'').trim().slice(0,5000);if(!m)return json(res,400,{error:'Message required.'});const lim=u.plan==='pro'?PRO:FREE,used=await usage(u.id);if(used>=lim)return json(res,402,{error:u.plan==='pro'?'Daily fair-use limit reached.':'You have used today’s free messages. Upgrade to Pro for more.'});if(crisis.test(m))return json(res,200,{reply:'What you wrote may involve immediate safety. JT Coaching is not crisis care. If you might act on thoughts of harming yourself or someone else, call local emergency services now or go to the nearest emergency department. If possible, contact a trusted person and stay with someone rather than being alone.'});const hr=await q('SELECT role,content FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 14',[u.id]),hist=hr.rows.reverse();await q('INSERT INTO messages(user_id,role,content,created_at) VALUES($1,$2,$3,$4)',[u.id,'user',m,now()]);let reply;if(!process.env.OPENAI_API_KEY)reply=demo(m,u.name);else{const input=[{role:'system',content:SYSTEM},...hist,{role:'user',content:m}];const r=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},body:JSON.stringify({model:MODEL,input})});if(!r.ok)return json(res,502,{error:'The coach is temporarily unavailable.'});const d=await r.json();const parts=Array.isArray(d.output)?d.output.flatMap(o=>Array.isArray(o.content)?o.content:[]):[];reply=parts.filter(c=>c&&c.type==='output_text'&&typeof c.text==='string').map(c=>c.text).join('\n').trim()||d.output_text||'I could not generate a response.'}await q('INSERT INTO messages(user_id,role,content,created_at) VALUES($1,$2,$3,$4)',[u.id,'assistant',reply,now()]);await inc(u.id);return json(res,200,{reply})}
-if(url.pathname==='/api/billing/checkout'&&req.method==='POST'){if(!process.env.STRIPE_SECRET_KEY||!process.env.STRIPE_PRICE_ID)return json(res,503,{error:'Billing is not configured yet.'});const base=process.env.APP_BASE_URL||`http://localhost:${PORT}`;const s=await stripeRequest('/v1/checkout/sessions',{'mode':'subscription','line_items[0][price]':process.env.STRIPE_PRICE_ID,'line_items[0][quantity]':'1','client_reference_id':String(u.id),'customer_email':u.email,'success_url':base+'/?billing=success','cancel_url':base+'/?billing=cancel'});return json(res,200,{url:s.url})}
-if(url.pathname==='/api/export'&&req.method==='GET'){const [g,j,c,m]=await Promise.all([q('SELECT * FROM goals WHERE user_id=$1',[u.id]),q('SELECT * FROM journal WHERE user_id=$1',[u.id]),q('SELECT * FROM checkins WHERE user_id=$1',[u.id]),q('SELECT role,content,created_at FROM messages WHERE user_id=$1',[u.id])]);res.setHeader('Content-Disposition','attachment; filename="jt-coaching-data.json"');return json(res,200,{exportedAt:now(),account:publicUser(u),goals:g.rows,journal:j.rows,checkins:c.rows,messages:m.rows})}
-if(url.pathname==='/api/account'&&req.method==='DELETE'){await q('DELETE FROM users WHERE id=$1',[u.id]);res.setHeader('Set-Cookie','jt_session=; Path=/; Max-Age=0');return json(res,200,{ok:true})}
-if(url.pathname==='/api/health')return json(res,200,{ok:true,aiConfigured:!!process.env.OPENAI_API_KEY,stripeConfigured:!!process.env.STRIPE_SECRET_KEY});return json(res,404,{error:'Not found'});
-}catch(e){console.error(e);return json(res,500,{error:'Something went wrong.'})}});
+const SYSTEM = `You are JT Coaching, a premium personal-development and life-coaching assistant for adults.
+Method: Clarity → Pattern → Choice → Action → Accountability.
+Be warm, direct, grounded and practical. Do not flatter or automatically agree.
+Distinguish facts, interpretations, fears, assumptions and values.
+Surface avoidance and conflicting incentives clearly but respectfully.
+Ask one strong question at a time when useful.
+Prefer concrete actions within 24–72 hours.
+You are a coach, not a therapist, physician, lawyer, financial adviser, or emergency service.
+Do not diagnose or present coaching as mental-health treatment.
+For high-stakes medical/legal/financial issues recommend qualified professional help.
+End substantive responses with “Next step:”.`;
+
+const crisis = /(suicid|kill myself|end my life|hurt myself|self[- ]?harm|harm myself|kill someone|hurt someone)/i;
+
+function demo(m, n) {
+  if (/decision|choose|choice|should i/i.test(m))
+    return 'Separate this into four things: what you want, what you fear, what the facts support, and what each option costs. Which choice best fits who you want to be six months from now?\\n\\nNext step: write the two strongest options and one real cost of each.';
+  if (/motivat|stuck|purpose|lost/i.test(m))
+    return 'Identify what has actually stopped: energy, belief, structure, meaning, or willingness to tolerate discomfort. Those are different problems. Which one is most true here?\\n\\nNext step: choose one action under 20 minutes that creates evidence of movement today.';
+  return `Let’s make this specific${n ? ' ' + n : ''}. What is in your control, what is outside it, and what are you avoiding because it is uncomfortable?\\n\\nNext step: name the single action that would make the next 24 hours meaningfully better.`;
+}
+
+const LOGO = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAKFAoADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD80qKKK6DIKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACii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AV3TnyvY+czjC+1p+0itUfqNE4U5B4rTtWJArkPDGrrrGlwzq28N7+1dLaTYwCa+mmk1dHyeFqNaM24m96tRNxWZFKOKuxNkVwyR71KaZejarMbZFUY35q1E1c0onXe5aXipo/rVZTUytXPJaFxZYWpc4qBGqXcKwtY2TJh0p4OaiRuKeDWbRaHg4qVOe9Qg5qRGqGgfkTipIjUQOafGeaxZOnUtBsYqSo41zipKxJCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA/mSoooqD3gooooAKKKKACiiigAooooAKKKKACiiigAroPBPiKTw3rUV2jldvp9a5+gEg5BxTi3FpoicFOPK+p+s/wCzB8UoPEWhWkEkgZ9mSCa+kYJFZQw5BGa/JP8AZk+LEnhrxBHDLKVj+UDcfev1K8B+IYvEWh2syOG3R54r6/C11Wpq5+eYzDvC1rLZnYwSjjBzWhC/FYsR2PjpWlFJgVtOJtQmaUb8Vbias2EmrkbYrjkj1IyLyHFSqaqo+amRs1zuJqiyjVODmqatzVlX4FYSRtB3JkNTA8VXQ8ipM5FYM2JFOakU4FRJTx1qWCJ1epY25qrnFTQnJFZSWgnY04+lOqNOAKkziuUkKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACikyfSjn0pDP5k6KKKk90KKKKACiiigAooooAKKKKACiiigAooooAKKKKAL+jalJpV9FLEcEMDnPpX6Q/sk/HGLUbKOxuLjJVQgBNfmeK9K+DXxCuPCHiC2KylI2lGcelduFrOlO55WPwqr0/M/a2G4S5jSRDlSAc/UVdhl4ryT4JfEq08XaBE3mBn2heWr1NmC8jke1fWRaqRuj4uN6b5Wa8EuKuJJmsa1nDECtCF/esJxPQpVLmjHJj3qzG+az4mq1G2K5ZI7YyLinmp1PSqaNVlXrmkjeLLSHpUi8VXRsmpVNYNG0XclDVIOtQhqeDmoNB5NTwNg1XqSM4xWcldDtc142BAp+9azVuCo60ouCa5nTEaO8UpNUVnNSLNmp5QsWgwzS1VExz1qTzM96mzJsS5FGRUXmAe9O3UWYh+RRkVHvFG8UrASZFLTAc0oOKAHUUm6jIoAWikyKWgAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKQnFG6m0gHZFGRTaTdTAfkUZFRFiKN5osBLkUZFRBj60pY+tFgJMilzVczYpPPHvTsx2LGeKN1Vzce9RNcVSjco/mgooorE9sKKKKACiiigAooooAKKKKACiiigAooooAKKKKACnwTNBKrocMpyCKKKaBarU+wP2SviNqtnf2tr5hkjZx1av0m0W9fUNLjmcAE9h9KKK+nwEm6ep8BmsVGt7po2xwx9q0YZDxRRXpSRz0Wy9C9XEOAKKK4pbnqRZYhOasDjvRRXNI64ksbc1MrUUVzs6IEm6pEOaKKxZqPzTozkUUVA0S0tFFS0aD1NSqaKKzM2OoyaKKhiHbzU6tkUUVLIEoooosA5aduooqGAo5oooqQClzRRQAoOaWiigAooooAKKKKACiiigAooooAKKKKACiiigBCaTNFFABmjNFFABmjNFFABSE4oooQCbqSiiqsAygnFFFWA1mxTPNOKKKCxlFFFUAwmoXf2oorSKA//2Q==';
+
+const CSS = `
+:root{
+  --bg:#07101b;--bg2:#0b1725;--panel:#0d1a29;--panel2:#102033;
+  --line:#1e3a57;--line2:#244a70;--text:#f7f9fc;--muted:#9fb3c9;
+  --blue:#2e90ff;--blue2:#69b6ff;--blue3:#0d5ed9;--good:#58d882;
+  --warn:#f3c444;--danger:#ef5a61;--shadow:0 16px 50px rgba(0,0,0,.28)
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{
+  margin:0;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:
+    radial-gradient(900px 460px at 50% -15%,rgba(50,135,224,.20),transparent 62%),
+    linear-gradient(180deg,#08111c 0%,#07101b 54%,#06101a 100%);
+  min-height:100vh
+}
+button,input,textarea{font:inherit}
+button{cursor:pointer}
+a{color:inherit}
+.app{max-width:1100px;margin:auto;padding:16px 18px 105px}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  min-height:76px;padding:6px 0 12px;border-bottom:1px solid rgba(93,151,211,.16)
+}
+.brand{display:flex;align-items:center;gap:13px;min-width:0}
+.brand-logo{width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px solid #27b5ff;box-shadow:0 0 22px rgba(50,179,255,.24);background:#dff8ff}
+.brand-copy h1{font-family:Georgia,serif;font-size:29px;line-height:1;margin:0;font-weight:500;white-space:nowrap}
+.brand-copy p{margin:8px 0 0;color:#7fa4cf;letter-spacing:.24em;font-size:10px;text-transform:uppercase}
+.profile-btn{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:#0b1724;color:#dceeff;display:grid;place-items:center;font-weight:800}
+.desktop-nav{display:flex;gap:6px;margin-left:auto}
+.navbtn{border:1px solid transparent;background:transparent;color:#8fa4bc;padding:10px 12px;border-radius:12px}
+.navbtn.active,.navbtn:hover{color:#fff;background:#0e1c2b;border-color:#1e3a57}
+.section{display:none}.section.active{display:block}
+.hero{
+  position:relative;overflow:hidden;margin-top:18px;min-height:410px;border:1px solid #18344f;border-radius:26px;
+  background:
+    linear-gradient(180deg,rgba(5,13,22,.08),rgba(3,10,17,.92)),
+    radial-gradient(900px 300px at 50% 28%,rgba(54,122,184,.18),transparent 65%),
+    linear-gradient(145deg,#132b42 0%,#0d2235 46%,#08121e 100%);
+  box-shadow:var(--shadow)
+}
+.hero:before,.hero:after{
+  content:"";position:absolute;left:0;right:0;pointer-events:none
+}
+.hero:before{
+  bottom:78px;height:150px;
+  background:
+    linear-gradient(145deg,transparent 0 12%,rgba(17,45,66,.75) 12% 25%,transparent 25% 31%,rgba(13,34,51,.9) 31% 42%,transparent 42%),
+    linear-gradient(215deg,transparent 0 15%,rgba(18,47,70,.74) 15% 27%,transparent 27% 35%,rgba(10,31,48,.9) 35% 48%,transparent 48%);
+  opacity:.65;filter:blur(.2px)
+}
+.hero:after{
+  bottom:0;height:115px;background:linear-gradient(180deg,transparent,rgba(3,10,17,.98))
+}
+.hero-inner{position:relative;z-index:2;padding:36px 28px 26px;text-align:center}
+.kicker{color:#9dc7ef;font-size:12px;font-weight:700;letter-spacing:.26em;text-transform:uppercase}
+.greeting{font-family:Georgia,serif;font-size:clamp(44px,7vw,68px);line-height:1;margin:10px 0 8px;font-weight:500}
+.tagline{font-family:Georgia,serif;font-style:italic;font-size:clamp(19px,3vw,25px);color:#f0f4f9;margin:0 0 28px}
+.coach-cta{
+  display:inline-flex;align-items:center;justify-content:center;gap:14px;min-width:min(620px,90%);padding:17px 24px;border:1px solid #63c2ff;
+  border-radius:999px;background:linear-gradient(180deg,#39a7ff,#0759cf);color:white;font-size:clamp(18px,3vw,25px);font-weight:800;
+  box-shadow:0 10px 30px rgba(0,103,234,.32),inset 0 1px rgba(255,255,255,.24)
+}
+.coach-cta .bubble{font-size:25px}
+.hero-helper{margin-top:13px;color:#7e9dc0;font-size:11px;letter-spacing:.25em;text-transform:uppercase}
+.quick-grid{position:relative;z-index:2;display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:26px}
+.quick{
+  border:1px solid #214a72;background:linear-gradient(180deg,rgba(13,30,47,.96),rgba(7,20,32,.96));
+  border-radius:18px;padding:16px 12px;color:#fff;text-align:left;min-height:120px
+}
+.quick .icon{font-size:25px;color:#58adff;margin-bottom:10px}.quick strong{font-size:17px;display:block}.quick small{color:#7fa2c5;letter-spacing:.15em;text-transform:uppercase;font-size:9px}
+.dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.card{background:linear-gradient(180deg,#0e1b2a,#0a1724);border:1px solid #1f4366;border-radius:20px;padding:20px;box-shadow:var(--shadow)}
+.card h2{font-size:24px;margin:0 0 4px}.card h3{margin:0}.muted{color:var(--muted)}
+.moods{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0}.mood{
+  border:1px solid #284b6b;background:#0a1724;color:#9cb5cc;border-radius:14px;padding:11px 4px;font-size:22px
+}
+.mood.selected{border-color:#4baeff;background:#102947;box-shadow:0 0 0 2px rgba(47,155,255,.12)}
+.range-row{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#9db1c5;margin-top:10px}
+input[type=range]{width:100%;accent-color:#44a6ff}
+textarea,input[type=text],input[type=email],input[type=password]{
+  width:100%;background:#07131f;border:1px solid #1d3b59;color:#fff;padding:12px;border-radius:12px
+}
+.primary{border:0;border-radius:12px;padding:12px 15px;background:linear-gradient(180deg,#3ca9ff,#0d68da);color:white;font-weight:800}
+.secondary{border:1px solid #234a6f;border-radius:12px;padding:12px 15px;background:#0b1a29;color:#d9e8f6}
+.full{width:100%}
+.goal-top{display:flex;align-items:center;justify-content:space-between;gap:12px}.goal-icon{width:58px;height:58px;border-radius:14px;background:#102d4d;display:grid;place-items:center;color:#7bc2ff;font-size:28px}
+.goal-name{font-family:Georgia,serif;font-size:23px}.progress-track{height:10px;background:#06111c;border-radius:999px;overflow:hidden;margin:18px 0 8px}
+.progress-fill{height:100%;background:linear-gradient(90deg,#43a7ff,#65baff);border-radius:999px}
+.progress-meta{display:flex;justify-content:space-between;color:#cbd9e7;font-size:13px}
+.next-step{border-top:1px solid #1f3b56;margin-top:16px;padding-top:16px}.next-step small{color:#8fa7bf}
+.quote{
+  margin-top:16px;border:1px solid #1d3d5c;border-radius:20px;padding:28px;text-align:center;
+  background:radial-gradient(540px 160px at 50% 0,rgba(48,121,186,.12),transparent 65%),linear-gradient(180deg,#0e1d2c,#081522)
+}
+.quote blockquote{font-family:Georgia,serif;font-style:italic;font-size:clamp(21px,3vw,29px);margin:0;color:#f5f8fb}
+.quote small{display:block;margin-top:16px;color:#7396bb;letter-spacing:.22em}
+.page-head{margin:28px 0 16px}.page-head h2{font-family:Georgia,serif;font-size:37px;margin:6px 0}.page-head p{color:#96abc0;margin:0}
+.chat-card{padding:0;overflow:hidden}.chat-head{padding:18px 18px 14px;border-bottom:1px solid #1e3c59}.chat{
+  height:54vh;min-height:380px;overflow:auto;padding:18px;background:linear-gradient(180deg,#081522,#07111c)
+}
+.msg{max-width:84%;padding:13px 15px;border-radius:16px;margin:9px 0;white-space:pre-wrap;line-height:1.55}
+.msg.user{margin-left:auto;background:linear-gradient(180deg,#176fc7,#0d4d91);border-bottom-right-radius:5px}
+.msg.assistant{background:#102234;border:1px solid #204563;border-bottom-left-radius:5px}
+.composer{display:flex;gap:9px;padding:14px;border-top:1px solid #1e3c59;background:#0c1a28}
+.composer textarea{resize:none;min-height:50px}.composer .primary{min-width:78px}
+.list{display:grid;gap:12px}.item{background:#0b1927;border:1px solid #1d3c5c;border-radius:16px;padding:15px}
+.item strong{font-size:17px}.item p{color:#a7b8c8;line-height:1.5}
+.row{display:flex;gap:9px;align-items:center}.row.wrap{flex-wrap:wrap}
+.goal-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.goal-row input[type=range]{margin-top:10px}
+.progress-overview{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stat strong{font-size:27px;display:block;margin-top:4px}.stat small{color:#819cb8}
+.pro-card{border-color:#2b5d8c;background:radial-gradient(500px 200px at 80% 0,rgba(44,133,221,.18),transparent 60%),linear-gradient(180deg,#0e2034,#0a1725)}
+.modal{position:fixed;inset:0;background:rgba(0,5,10,.82);display:none;align-items:center;justify-content:center;padding:18px;z-index:30}
+.modal.show{display:flex}.modal .card{max-width:460px;width:100%;margin:0}
+.auth-logo{width:86px;height:86px;border-radius:50%;object-fit:cover;border:2px solid #34b6ff;display:block;margin:0 auto 14px}
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.auth-msg{min-height:20px;color:#ff9ca3}
+.footer{text-align:center;color:#6e89a4;font-size:12px;padding:30px 12px}.footer a{color:#8eb6dd}
+.bottom-nav{display:none}
+.badge{font-size:10px;border:1px solid #285173;border-radius:999px;padding:4px 7px;color:#8dc8ff;background:#0d2033}
+.voice-coming{display:flex;gap:8px;align-items:center;justify-content:center}
+@media(max-width:760px){
+  .app{padding:10px 12px 100px}.topbar{min-height:68px}.brand-logo{width:54px;height:54px}.brand-copy h1{font-size:24px}.brand-copy p{font-size:8px;letter-spacing:.18em}
+  .desktop-nav{display:none}.hero{min-height:420px;border-radius:21px}.hero-inner{padding:30px 14px 22px}.greeting{font-size:52px}.tagline{font-size:20px}
+  .coach-cta{min-width:92%;padding:16px 16px;font-size:20px}.quick-grid{grid-template-columns:repeat(2,1fr);gap:10px}.quick{min-height:108px}
+  .dashboard-grid{grid-template-columns:1fr}.card{border-radius:18px;padding:17px}.progress-overview{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:13px}
+  .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}.chat{height:56vh}.composer{padding:10px}.composer .primary{min-width:66px}
+  .bottom-nav{
+    position:fixed;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;
+    padding:7px;background:rgba(7,16,27,.95);backdrop-filter:blur(18px);border:1px solid #1e3f60;border-radius:20px;box-shadow:0 14px 45px rgba(0,0,0,.45)
+  }
+  .bottom-nav button{border:0;background:transparent;color:#7890a8;font-size:10px;padding:7px 2px}.bottom-nav button.active{color:#4cabff}.bottom-nav b{font-size:19px;display:block;margin-bottom:2px}
+  .footer{padding-bottom:20px}
+}
+`;
+
+const HTML = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07101b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/app.css">
+<title>JT Coaching</title>
+</head>
+<body>
+<div class="app">
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="${LOGO}" alt="JT Coaching">
+    <div class="brand-copy"><h1>JT Coaching</h1><p>Clarity • Growth • Progress</p></div>
+  </div>
+  <nav class="desktop-nav">
+    <button class="navbtn active" data-v="home">Home</button>
+    <button class="navbtn" data-v="coach">Coach</button>
+    <button class="navbtn" data-v="goals">Goals</button>
+    <button class="navbtn" data-v="journal">Journal</button>
+    <button class="navbtn" data-v="progress">Progress</button>
+  </nav>
+  <button class="profile-btn" data-v="account" id="avatar">J</button>
+</header>
+
+<main>
+<section id="home" class="section active">
+  <div class="hero">
+    <div class="hero-inner">
+      <div class="kicker" id="timeGreeting">Good evening,</div>
+      <div class="greeting" id="greetingName">James</div>
+      <p class="tagline">A better you. A brighter tomorrow.</p>
+      <button class="coach-cta" data-v="coach"><span class="bubble">◌</span> Talk to Your Coach <span>›</span></button>
+      <div class="hero-helper">Ask • Reflect • Get Guidance</div>
+
+      <div class="quick-grid">
+        <button class="quick" data-v="goals"><div class="icon">◎</div><strong>Goals</strong><small>Plan & Act</small></button>
+        <button class="quick" data-v="journal"><div class="icon">▤</div><strong>Journal</strong><small>Reflect</small></button>
+        <button class="quick" data-v="progress"><div class="icon">▥</div><strong>Progress</strong><small>Track</small></button>
+        <button class="quick" data-v="coach"><div class="icon">◇</div><strong>Wellbeing</strong><small>Mind & Body</small></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dashboard-grid">
+    <div class="card">
+      <h2>Today's Check-In</h2>
+      <p class="muted">How are you feeling right now?</p>
+      <div class="moods" id="moods">
+        <button class="mood" data-mood="1">☹</button>
+        <button class="mood" data-mood="2">🙁</button>
+        <button class="mood selected" data-mood="3">😐</button>
+        <button class="mood" data-mood="4">🙂</button>
+        <button class="mood" data-mood="5">😊</button>
+      </div>
+      <div class="range-row"><span>⚡ Energy Level</span><span id="energyVal">3 / 5</span></div>
+      <input id="energy" type="range" min="1" max="5" value="3">
+      <textarea id="note" rows="2" placeholder="Anything influencing today?" style="margin-top:14px"></textarea>
+      <button id="check" class="secondary full" style="margin-top:10px">Save Check-In</button>
+    </div>
+
+    <div class="card">
+      <div class="goal-top">
+        <div><div class="kicker">Current Focus</div><div id="focusTitle" class="goal-name">Your next goal</div></div>
+        <div class="goal-icon">◎</div>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="focusBar" style="width:0%"></div></div>
+      <div class="progress-meta"><span>Progress</span><span id="focusPct">0%</span></div>
+      <div class="next-step">
+        <strong>Next Step</strong>
+        <small id="focusPrompt" style="display:block;margin-top:6px">Open Goals and choose the action that moves this forward.</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="quote">
+    <blockquote>“Clarity creates choice. Choice creates action.”</blockquote>
+    <small>JT COACHING</small>
+  </div>
+</section>
+
+<section id="coach" class="section">
+  <div class="page-head"><div class="kicker">JT Coach</div><h2>Your Coaching Room</h2><p>Bring the decision, goal, pattern or obstacle that matters most right now.</p></div>
+  <div class="card chat-card">
+    <div class="chat-head row" style="justify-content:space-between">
+      <div><strong>JT Coach</strong><div class="muted" style="font-size:12px">Personal development coaching</div></div>
+      <div class="voice-coming"><span class="badge">VOICE COMING SOON</span></div>
+    </div>
+    <div id="chat" class="chat"></div>
+    <div class="composer">
+      <textarea id="message" rows="2" placeholder="What would be most useful to work through?"></textarea>
+      <button id="send" class="primary">Send</button>
+    </div>
+  </div>
+</section>
+
+<section id="goals" class="section">
+  <div class="page-head"><div class="kicker">Direction</div><h2>Your Goals</h2><p>Choose what matters and make progress visible.</p></div>
+  <div class="card">
+    <div class="row"><input id="goal" type="text" placeholder="Add a new goal"><button id="addGoal" class="primary">Add</button></div>
+    <div id="goalsList" class="list" style="margin-top:14px"></div>
+  </div>
+</section>
+
+<section id="journal" class="section">
+  <div class="page-head"><div class="kicker">Reflection</div><h2>Journal</h2><p>Capture what you're noticing, learning and choosing.</p></div>
+  <div class="card">
+    <input id="jtitle" type="text" placeholder="Entry title (optional)">
+    <textarea id="jbody" rows="7" style="margin-top:9px" placeholder="What are you noticing?"></textarea>
+    <button id="saveJ" class="primary" style="margin-top:9px">Save Entry</button>
+  </div>
+  <div id="journalList" class="list" style="margin-top:14px"></div>
+</section>
+
+<section id="progress" class="section">
+  <div class="page-head"><div class="kicker">Momentum</div><h2>Your Progress</h2><p>A simple view of the work you're putting in.</p></div>
+  <div class="progress-overview">
+    <div class="card stat"><small>Messages today</small><strong id="use">0 / ${FREE}</strong></div>
+    <div class="card stat"><small>Active goals</small><strong id="goalCount">0</strong></div>
+    <div class="card stat"><small>Check-ins</small><strong id="checkinCount">0</strong></div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h2>Goal Progress</h2>
+    <div id="progressGoals" class="list" style="margin-top:14px"></div>
+  </div>
+</section>
+
+<section id="plans" class="section">
+  <div class="page-head"><div class="kicker">Membership</div><h2>JT Coaching Pro</h2><p>Go deeper when you're ready.</p></div>
+  <div class="dashboard-grid">
+    <div class="card"><div class="kicker">Free</div><h2 style="font-size:38px">$0</h2><p class="muted">${FREE} coaching messages/day<br>Up to 3 active goals<br>Journal and check-ins</p></div>
+    <div class="card pro-card"><div class="kicker">Pro</div><h2 style="font-size:38px">${process.env.PRO_PRICE_LABEL || '$19/month'}</h2><p class="muted">Expanded coaching<br>Unlimited goals<br>Full history<br>Live voice planned</p><button id="upgrade" class="primary">Upgrade to Pro</button></div>
+  </div>
+</section>
+
+<section id="account" class="section">
+  <div class="page-head"><div class="kicker">Account</div><h2 id="acct">Your Account</h2><p id="email"></p></div>
+  <div class="card">
+    <div class="row wrap">
+      <button class="secondary" data-v="plans">View Plans</button>
+      <button id="export" class="secondary">Export Data</button>
+      <button id="logout" class="secondary">Sign Out</button>
+      <button id="delete" class="secondary">Delete Account</button>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="footer"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/safety">Safety</a><br><br>© ${new Date().getFullYear()} JT Coaching</footer>
+</div>
+
+<nav class="bottom-nav">
+  <button data-v="home" class="active"><b>⌂</b>Home</button>
+  <button data-v="coach"><b>◌</b>Coach</button>
+  <button data-v="goals"><b>◎</b>Goals</button>
+  <button data-v="journal"><b>▤</b>Journal</button>
+  <button data-v="progress"><b>▥</b>Progress</button>
+</nav>
+
+<div id="auth" class="modal">
+  <div class="card">
+    <img class="auth-logo" src="${LOGO}" alt="JT Coaching">
+    <div style="text-align:center"><div class="kicker">Welcome</div><h2>JT Coaching</h2><p class="muted">Clarity, reflection and forward movement.</p></div>
+    <div class="auth-tabs"><button id="signupTab" class="secondary">Create Account</button><button id="loginTab" class="secondary">Sign In</button></div>
+    <input id="name" type="text" placeholder="First name">
+    <input id="authEmail" type="email" placeholder="Email" style="margin-top:9px">
+    <input id="pw" type="password" placeholder="Password (10+ characters)" style="margin-top:9px">
+    <button id="authGo" class="primary full" style="margin-top:10px">Create Free Account</button>
+    <p id="authMsg" class="auth-msg"></p>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>`;
+
+const JS = `
+let cfg={},data={},mode='signup',deferred=null,selectedMood=3;
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+
+async function api(u,o={}){
+  const r=await fetch(u,{headers:{'content-type':'application/json'},...o});
+  let d={}; try{d=await r.json()}catch{}
+  if(!r.ok)throw new Error(d.error||'Request failed');
+  return d
+}
+
+function setActive(v){
+  $$('.section').forEach(x=>x.classList.toggle('active',x.id===v));
+  $$('[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
+  scrollTo(0,0)
+}
+$$('[data-v]').forEach(b=>b.onclick=()=>setActive(b.dataset.v));
+
+function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function firstName(n=''){return String(n).trim().split(/\\s+/)[0]||'there'}
+function greeting(){
+  const h=new Date().getHours();
+  return h<12?'Good morning,':h<18?'Good afternoon,':'Good evening,'
+}
+
+async function boot(){
+  cfg=await api('/api/config');
+  if(!cfg.user){$('#auth').classList.add('show');return}
+  await load()
+}
+async function load(){data=await api('/api/data');render()}
+
+function render(){
+  const fn=firstName(data.user.name);
+  $('#timeGreeting').textContent=greeting();
+  $('#greetingName').textContent=fn;
+  $('#avatar').textContent=fn[0]?.toUpperCase()||'J';
+  $('#acct').textContent=fn+"'s Account";
+  $('#email').textContent=data.user.email+' · '+(data.user.plan==='pro'?'Pro':'Free')+' plan';
+  $('#use').textContent=data.usedToday+' / '+data.limit;
+  $('#goalCount').textContent=data.goals.filter(g=>g.status==='active').length;
+  $('#checkinCount').textContent=data.checkins.length;
+
+  const focus=data.goals.find(g=>g.status==='active')||data.goals[0];
+  if(focus){
+    $('#focusTitle').textContent=focus.title;
+    $('#focusBar').style.width=Math.max(0,Math.min(100,Number(focus.progress)||0))+'%';
+    $('#focusPct').textContent=(Number(focus.progress)||0)+'%';
+    $('#focusPrompt').textContent=focus.progress>=100?'Completed — choose what matters next.':'What is the next concrete action that moves this forward?'
+  }else{
+    $('#focusTitle').textContent='Choose your first goal';
+    $('#focusBar').style.width='0%'; $('#focusPct').textContent='0%';
+    $('#focusPrompt').textContent='Open Goals and add one meaningful focus.'
+  }
+
+  const msgs=data.messages.length?data.messages:[{role:'assistant',content:'What would be most useful to work through today?'}];
+  $('#chat').innerHTML=msgs.map(m=>'<div class="msg '+m.role+'">'+esc(m.content)+'</div>').join('');
+  $('#chat').scrollTop=$('#chat').scrollHeight;
+
+  const goalHtml=data.goals.length?data.goals.map(g=>'<div class="item"><div class="goal-row"><div><strong>'+esc(g.title)+'</strong><div class="muted" style="font-size:12px">'+(g.status==='complete'?'Complete':'Active')+'</div><input type="range" min="0" max="100" value="'+g.progress+'" onchange="goalProgress('+g.id+',this.value)"></div><strong>'+g.progress+'%</strong></div></div>').join(''):'<div class="item muted">No goals yet. Add one above.</div>';
+  $('#goalsList').innerHTML=goalHtml;
+  $('#progressGoals').innerHTML=goalHtml;
+
+  $('#journalList').innerHTML=data.journal.length?data.journal.map(j=>'<div class="item"><strong>'+esc(j.title||'Journal entry')+'</strong><p>'+esc(j.content)+'</p></div>').join(''):'<div class="item muted">Your saved reflections will appear here.</div>'
+}
+
+window.goalProgress=async(id,p)=>{await api('/api/goals/'+id,{method:'PATCH',body:JSON.stringify({progress:Number(p)})});await load()};
+
+$$('.mood').forEach(b=>b.onclick=()=>{
+  selectedMood=Number(b.dataset.mood);
+  $$('.mood').forEach(x=>x.classList.toggle('selected',x===b))
+});
+$('#energy').oninput=()=>$('#energyVal').textContent=$('#energy').value+' / 5';
+
+$('#send').onclick=async()=>{
+  const m=$('#message').value.trim(); if(!m)return;
+  $('#message').value='';
+  $('#chat').innerHTML+='<div class="msg user">'+esc(m)+'</div>';
+  $('#chat').scrollTop=$('#chat').scrollHeight;
+  $('#send').disabled=true; $('#send').textContent='...';
+  try{
+    const d=await api('/api/coach',{method:'POST',body:JSON.stringify({message:m})});
+    $('#chat').innerHTML+='<div class="msg assistant">'+esc(d.reply)+'</div>';
+    $('#chat').scrollTop=$('#chat').scrollHeight;
+    await load()
+  }catch(e){
+    if(e.message.includes('free messages')){
+      if(confirm("You've completed today's free coaching messages. View JT Coaching Pro?")) setActive('plans')
+    }else alert(e.message)
+  }finally{$('#send').disabled=false;$('#send').textContent='Send'}
+};
+
+$('#addGoal').onclick=async()=>{
+  const title=$('#goal').value.trim();if(!title)return;
+  try{await api('/api/goals',{method:'POST',body:JSON.stringify({title})});$('#goal').value='';await load()}
+  catch(e){alert(e.message)}
+};
+$('#saveJ').onclick=async()=>{
+  const content=$('#jbody').value.trim();if(!content)return;
+  await api('/api/journal',{method:'POST',body:JSON.stringify({title:$('#jtitle').value,content})});
+  $('#jtitle').value='';$('#jbody').value='';await load()
+};
+$('#check').onclick=async()=>{
+  await api('/api/checkins',{method:'POST',body:JSON.stringify({mood:selectedMood,energy:+$('#energy').value,note:$('#note').value})});
+  $('#note').value='';await load();alert('Check-in saved')
+};
+
+$('#signupTab').onclick=()=>{mode='signup';$('#name').style.display='block';$('#authGo').textContent='Create Free Account'};
+$('#loginTab').onclick=()=>{mode='login';$('#name').style.display='none';$('#authGo').textContent='Sign In'};
+$('#authGo').onclick=async()=>{
+  try{
+    await api('/api/auth/'+mode,{method:'POST',body:JSON.stringify({name:$('#name').value,email:$('#authEmail').value,password:$('#pw').value})});
+    location.reload()
+  }catch(e){$('#authMsg').textContent=e.message}
+};
+$('#logout').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});location.reload()};
+$('#delete').onclick=async()=>{if(confirm('Permanently delete your JT Coaching account and stored data?')){await api('/api/account',{method:'DELETE'});location.reload()}};
+$('#export').onclick=()=>location.href='/api/export';
+$('#upgrade').onclick=async()=>{try{const d=await api('/api/billing/checkout',{method:'POST'});location.href=d.url}catch(e){alert(e.message)}};
+
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e});
+if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js');
+boot();
+`;
+
+async function stripeRequest(pathname, params) {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error('Billing not configured');
+  const r = await fetch('https://api.stripe.com' + pathname, {
+    method: 'POST',
+    headers: {
+      authorization: 'Basic ' + Buffer.from(key + ':').toString('base64'),
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams(params)
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error?.message || 'Stripe error');
+  return d;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, 'http://x');
+
+    if (req.method === 'GET' && url.pathname === '/') return text(res, 200, HTML);
+    if (req.method === 'GET' && url.pathname === '/app.css') return text(res, 200, CSS, 'text/css; charset=utf-8');
+    if (req.method === 'GET' && url.pathname === '/app.js') return text(res, 200, JS, 'application/javascript; charset=utf-8');
+    if (req.method === 'GET' && url.pathname === '/manifest.webmanifest')
+      return json(res, 200, {
+        name:'JT Coaching',short_name:'JT Coaching',start_url:'/',display:'standalone',
+        background_color:'#07101b',theme_color:'#07101b',icons:[]
+      });
+    if (req.method === 'GET' && url.pathname === '/sw.js')
+      return text(res, 200,
+        "const C='jt-v2';self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/app.css','/app.js','/manifest.webmanifest']))));self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&!new URL(e.request.url).pathname.startsWith('/api/'))e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})",
+        'application/javascript'
+      );
+
+    if (req.method === 'GET' && ['/privacy','/terms','/safety'].includes(url.pathname)) {
+      const title = url.pathname.slice(1);
+      const copy =
+        title === 'privacy'
+          ? 'JT Coaching stores account details, coaching conversations, goals, journal entries and check-ins to provide the service. Payment card data is handled by Stripe. Users can export or delete their stored data. This starter policy requires legal review before broad public launch.'
+          : title === 'terms'
+          ? 'JT Coaching is personal-development software, not psychotherapy, medical care, legal advice, financial advice or emergency services. Users remain responsible for their decisions. Free features may have usage limits and paid subscriptions renew until cancelled. These starter terms require legal review before public sales.'
+          : 'JT Coaching supports adult personal development. It is not a therapist, psychologist, physician, crisis line or emergency service. If you or someone else may be in immediate danger, contact local emergency services or an appropriate crisis service and seek human support.';
+      return text(res, 200, `<!doctype html><meta name=viewport content='width=device-width'><link rel=stylesheet href=/app.css><div class=app><div class=card style='margin-top:30px'><div class=kicker>${title}</div><h2>${title[0].toUpperCase()+title.slice(1)}</h2><p class=muted style='line-height:1.7'>${copy}</p><p><a href=/ style='color:#69b6ff'>← Back to JT Coaching</a></p></div></div>`);
+    }
+
+    if (url.pathname === '/api/config' && req.method === 'GET') {
+      const u = await user(req);
+      return json(res, 200, {
+        user: publicUser(u), freeDailyMessages: FREE, proDailyMessages: PRO,
+        proPrice: process.env.PRO_PRICE_LABEL || '$19/month',
+        aiConfigured: !!process.env.OPENAI_API_KEY,
+        stripeConfigured: !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID)
+      });
+    }
+
+    if (url.pathname === '/api/auth/signup' && req.method === 'POST') {
+      const b = await body(req);
+      const email = String(b.email || '').trim().toLowerCase();
+      const name = String(b.name || '').trim().slice(0, 80);
+      const p = String(b.password || '');
+      if (!/^\\S+@\\S+\\.\\S+$/.test(email)) return json(res, 400, { error:'Enter a valid email.' });
+      if (p.length < 10) return json(res, 400, { error:'Use at least 10 characters.' });
+      try {
+        const r = await q('INSERT INTO users(email,name,password_hash,created_at) VALUES($1,$2,$3,$4) RETURNING id', [email,name,passHash(p),now()]);
+        await session(res, Number(r.rows[0].id));
+        return json(res, 200, { ok:true });
+      } catch {
+        return json(res, 409, { error:'That email already has an account.' });
+      }
+    }
+
+    if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+      const b = await body(req);
+      const ur = await q('SELECT * FROM users WHERE email=$1', [String(b.email || '').trim().toLowerCase()]);
+      const u = ur.rows[0];
+      if (!u || !passOK(String(b.password || ''), u.password_hash)) return json(res, 401, { error:'Incorrect email or password.' });
+      await session(res, u.id);
+      return json(res, 200, { ok:true });
+    }
+
+    if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+      const t = cookies(req).jt_session;
+      if (t) await q('DELETE FROM sessions WHERE token_hash=$1', [h(t)]);
+      res.setHeader('Set-Cookie', 'jt_session=; Path=/; Max-Age=0');
+      return json(res, 200, { ok:true });
+    }
+
+    const u = await user(req);
+    if (url.pathname.startsWith('/api/') && !u) return json(res, 401, { error:'Please sign in.' });
+
+    if (url.pathname === '/api/data' && req.method === 'GET') {
+      const [g,j,c,m,usedToday] = await Promise.all([
+        q('SELECT * FROM goals WHERE user_id=$1 ORDER BY id DESC',[u.id]),
+        q('SELECT * FROM journal WHERE user_id=$1 ORDER BY id DESC LIMIT 100',[u.id]),
+        q('SELECT * FROM checkins WHERE user_id=$1 ORDER BY id DESC LIMIT 60',[u.id]),
+        q('SELECT role,content,created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 30',[u.id]),
+        usage(u.id)
+      ]);
+      return json(res, 200, {
+        user: publicUser(u), goals:g.rows, journal:j.rows, checkins:c.rows,
+        messages:m.rows.reverse(), usedToday, limit:u.plan === 'pro' ? PRO : FREE
+      });
+    }
+
+    if (url.pathname === '/api/goals' && req.method === 'POST') {
+      const b = await body(req);
+      const title = String(b.title || '').trim().slice(0,180);
+      if (!title) return json(res,400,{error:'Goal required.'});
+      const cr = await q("SELECT COUNT(*)::int n FROM goals WHERE user_id=$1 AND status='active'",[u.id]);
+      if (u.plan !== 'pro' && cr.rows[0].n >= 3) return json(res,403,{error:'Free accounts can have up to 3 active goals.'});
+      await q('INSERT INTO goals(user_id,title,created_at) VALUES($1,$2,$3)',[u.id,title,now()]);
+      return json(res,200,{ok:true});
+    }
+
+    if (url.pathname.startsWith('/api/goals/') && req.method === 'PATCH') {
+      const id = Number(url.pathname.split('/').pop());
+      const b = await body(req);
+      const p = Math.max(0, Math.min(100, Number(b.progress) || 0));
+      await q('UPDATE goals SET progress=$1,status=$2 WHERE id=$3 AND user_id=$4',[p,p>=100?'complete':'active',id,u.id]);
+      return json(res,200,{ok:true});
+    }
+
+    if (url.pathname === '/api/journal' && req.method === 'POST') {
+      const b = await body(req);
+      const content = String(b.content || '').trim().slice(0,12000);
+      if (!content) return json(res,400,{error:'Journal entry required.'});
+      await q('INSERT INTO journal(user_id,title,content,created_at) VALUES($1,$2,$3,$4)',[u.id,String(b.title||'').slice(0,180),content,now()]);
+      return json(res,200,{ok:true});
+    }
+
+    if (url.pathname === '/api/checkins' && req.method === 'POST') {
+      const b = await body(req);
+      await q('INSERT INTO checkins(user_id,mood,energy,note,created_at) VALUES($1,$2,$3,$4,$5)',[
+        u.id,Math.max(1,Math.min(5,+b.mood||3)),Math.max(1,Math.min(5,+b.energy||3)),String(b.note||'').slice(0,1000),now()
+      ]);
+      return json(res,200,{ok:true});
+    }
+
+    if (url.pathname === '/api/coach' && req.method === 'POST') {
+      const b = await body(req);
+      const m = String(b.message || '').trim().slice(0,5000);
+      if (!m) return json(res,400,{error:'Message required.'});
+      const lim = u.plan === 'pro' ? PRO : FREE;
+      const used = await usage(u.id);
+      if (used >= lim) return json(res,402,{error:u.plan==='pro'?'Daily fair-use limit reached.':'You have used today’s free messages. Upgrade to Pro for more.'});
+
+      if (crisis.test(m))
+        return json(res,200,{reply:'What you wrote may involve immediate safety. JT Coaching is not crisis care. If you might act on thoughts of harming yourself or someone else, call local emergency services now or go to the nearest emergency department. If possible, contact a trusted person and stay with someone rather than being alone.'});
+
+      const hr = await q('SELECT role,content FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 14',[u.id]);
+      const hist = hr.rows.reverse();
+      await q('INSERT INTO messages(user_id,role,content,created_at) VALUES($1,$2,$3,$4)',[u.id,'user',m,now()]);
+
+      let reply;
+      if (!process.env.OPENAI_API_KEY) {
+        reply = demo(m,u.name);
+      } else {
+        const input = [{role:'system',content:SYSTEM},...hist,{role:'user',content:m}];
+        const r = await fetch('https://api.openai.com/v1/responses',{
+          method:'POST',
+          headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},
+          body:JSON.stringify({model:MODEL,input})
+        });
+        if (!r.ok) return json(res,502,{error:'The coach is temporarily unavailable.'});
+        const d = await r.json();
+        const parts = Array.isArray(d.output) ? d.output.flatMap(o=>Array.isArray(o.content)?o.content:[]) : [];
+        reply = parts.filter(c=>c&&c.type==='output_text'&&typeof c.text==='string').map(c=>c.text).join('\\n').trim()
+          || d.output_text || 'I could not generate a response.';
+      }
+
+      await q('INSERT INTO messages(user_id,role,content,created_at) VALUES($1,$2,$3,$4)',[u.id,'assistant',reply,now()]);
+      await inc(u.id);
+      return json(res,200,{reply});
+    }
+
+    if (url.pathname === '/api/billing/checkout' && req.method === 'POST') {
+      if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_PRICE_ID) return json(res,503,{error:'Billing is not configured yet.'});
+      const base = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
+      const s = await stripeRequest('/v1/checkout/sessions',{
+        mode:'subscription',
+        'line_items[0][price]':process.env.STRIPE_PRICE_ID,
+        'line_items[0][quantity]':'1',
+        client_reference_id:String(u.id),
+        customer_email:u.email,
+        success_url:base+'/?billing=success',
+        cancel_url:base+'/?billing=cancel'
+      });
+      return json(res,200,{url:s.url});
+    }
+
+    if (url.pathname === '/api/export' && req.method === 'GET') {
+      const [g,j,c,m] = await Promise.all([
+        q('SELECT * FROM goals WHERE user_id=$1',[u.id]),
+        q('SELECT * FROM journal WHERE user_id=$1',[u.id]),
+        q('SELECT * FROM checkins WHERE user_id=$1',[u.id]),
+        q('SELECT role,content,created_at FROM messages WHERE user_id=$1',[u.id])
+      ]);
+      res.setHeader('Content-Disposition','attachment; filename="jt-coaching-data.json"');
+      return json(res,200,{exportedAt:now(),account:publicUser(u),goals:g.rows,journal:j.rows,checkins:c.rows,messages:m.rows});
+    }
+
+    if (url.pathname === '/api/account' && req.method === 'DELETE') {
+      await q('DELETE FROM users WHERE id=$1',[u.id]);
+      res.setHeader('Set-Cookie','jt_session=; Path=/; Max-Age=0');
+      return json(res,200,{ok:true});
+    }
+
+    if (url.pathname === '/api/health')
+      return json(res,200,{ok:true,aiConfigured:!!process.env.OPENAI_API_KEY,stripeConfigured:!!process.env.STRIPE_SECRET_KEY});
+
+    return json(res,404,{error:'Not found'});
+  } catch(e) {
+    console.error(e);
+    return json(res,500,{error:'Something went wrong.'});
+  }
+});
+
 server.listen(PORT,()=>console.log('JT Coaching running on port '+PORT));
