@@ -694,7 +694,7 @@ const server = http.createServer(async (req, res) => {
       const email = String(b.email || '').trim().toLowerCase();
       const name = String(b.name || '').trim().slice(0, 80);
       const p = String(b.password || '');
-      if (!/^\\S+@\\S+\\.\\S+$/.test(email)) return json(res, 400, { error:'Enter a valid email.' });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error:'Enter a valid email.' });
       if (p.length < 10) return json(res, 400, { error:'Use at least 10 characters.' });
       try {
         const r = await q('INSERT INTO users(email,name,password_hash,created_at) VALUES($1,$2,$3,$4) RETURNING id', [email,name,passHash(p),now()]);
