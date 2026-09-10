@@ -35,9 +35,17 @@ async function initDb() {
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       expires_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS conversations(
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT 'New chat',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS messages(
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      conversation_id BIGINT REFERENCES conversations(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
       created_at TEXT NOT NULL
@@ -73,6 +81,22 @@ async function initDb() {
     );
     ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_coach TEXT NOT NULL DEFAULT 'james';
     ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_preview_used BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS conversation_id BIGINT REFERENCES conversations(id) ON DELETE CASCADE;
+    INSERT INTO conversations(user_id,title,created_at,updated_at)
+    SELECT m.user_id,'Previous coaching history',MIN(m.created_at),MAX(m.created_at)
+    FROM messages m
+    WHERE m.conversation_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM conversations c
+        WHERE c.user_id=m.user_id AND c.title='Previous coaching history'
+      )
+    GROUP BY m.user_id;
+    UPDATE messages m
+    SET conversation_id=c.id
+    FROM conversations c
+    WHERE m.conversation_id IS NULL
+      AND c.user_id=m.user_id
+      AND c.title='Previous coaching history';
   `);
 }
 await initDb();
@@ -264,6 +288,13 @@ Recent check-ins:
 ${checkins || '(none yet)'}`;
 }
 
+function conversationTitle(message) {
+  const clean=String(message||'').replace(/\s+/g,' ').trim();
+  if(!clean)return 'New chat';
+  const words=clean.split(' ').slice(0,7).join(' ');
+  return (words.length>56?words.slice(0,53).trim()+'…':words).replace(/[.!?,;:]+$/,'') || 'New chat';
+}
+
 const crisis = /(suicid|kill myself|end my life|hurt myself|self[- ]?harm|harm myself|kill someone|hurt someone)/i;
 
 function demo(m, n) {
@@ -380,14 +411,28 @@ textarea,input[type=text],input[type=email],input[type=password]{
 .quote blockquote{font-family:Georgia,serif;font-style:italic;font-size:clamp(21px,3vw,29px);margin:0;color:#f5f8fb}
 .quote small{display:block;margin-top:16px;color:#7396bb;letter-spacing:.22em}
 .page-head{margin:28px 0 16px}.page-head h2{font-family:Georgia,serif;font-size:37px;margin:6px 0}.page-head p{color:#96abc0;margin:0}
-.chat-card{padding:0;overflow:hidden}.chat-head{padding:18px 18px 14px;border-bottom:1px solid #1e3c59}.chat{
-  height:54vh;min-height:380px;overflow:auto;padding:18px;background:linear-gradient(180deg,#081522,#07111c)
-}
-.msg{max-width:84%;padding:13px 15px;border-radius:16px;margin:9px 0;white-space:pre-wrap;line-height:1.55}
+.chat-card{padding:0;overflow:hidden}.chat-head{padding:14px 16px;border-bottom:1px solid #1e3c59}
+.chat-shell{display:grid;grid-template-columns:270px 1fr;min-height:620px;background:#07111c}
+.chat-sidebar{border-right:1px solid #1e3c59;background:#091521;padding:12px;overflow:auto;max-height:70vh}
+.chat-sidebar-top{display:flex;gap:8px;position:sticky;top:0;background:#091521;padding-bottom:10px;z-index:2}
+.new-chat{flex:1}
+.chat-group{margin:14px 0}.chat-group-title{color:#718ca6;font-size:10px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;margin:0 8px 6px}
+.chat-history-btn{width:100%;text-align:left;border:0;background:transparent;color:#c9d8e7;border-radius:10px;padding:10px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-history-btn:hover,.chat-history-btn.active{background:#10263a;color:#fff}
+.chat-main{min-width:0;display:flex;flex-direction:column;min-height:620px}
+.chat-current-head{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #173650;background:#0a1724}
+.chat-current-title{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-toggle{display:none}
+.chat{height:52vh;min-height:390px;overflow:auto;padding:18px 18px 120px;background:linear-gradient(180deg,#081522,#07111c);scroll-behavior:smooth}
+.msg{max-width:82%;padding:13px 15px;border-radius:16px;margin:9px 0;white-space:pre-wrap;line-height:1.55}
 .msg.user{margin-left:auto;background:linear-gradient(180deg,#176fc7,#0d4d91);border-bottom-right-radius:5px}
 .msg.assistant{background:#102234;border:1px solid #204563;border-bottom-left-radius:5px}
-.composer{display:flex;gap:9px;padding:14px;border-top:1px solid #1e3c59;background:#0c1a28}
-.composer textarea{resize:none;min-height:50px}.composer .primary{min-width:78px}
+.composer-wrap{position:sticky;bottom:0;padding:10px 14px 14px;background:linear-gradient(180deg,rgba(7,17,28,0),#07111c 25%);z-index:5}
+.composer{display:flex;align-items:flex-end;gap:9px;padding:10px;border:1px solid #244c70;border-radius:24px;background:#0d1c2b;box-shadow:0 10px 34px rgba(0,0,0,.32)}
+.composer textarea{resize:none;min-height:62px;max-height:190px;border:0;background:transparent;padding:10px 8px;line-height:1.45;overflow-y:auto}
+.composer textarea:focus{outline:none}
+.composer .primary{min-width:52px;width:52px;height:52px;border-radius:50%;padding:0;font-size:20px;flex:0 0 52px}
+.chat-empty{min-height:100%;display:grid;place-items:center;text-align:center;color:#8fa7bf;padding:30px}.chat-empty strong{color:#fff;font-family:Georgia,serif;font-size:28px;display:block;margin-bottom:8px}
 .list{display:grid;gap:12px}.item{background:#0b1927;border:1px solid #1d3c5c;border-radius:16px;padding:15px}
 .item strong{font-size:17px}.item p{color:#a7b8c8;line-height:1.5}
 .row{display:flex;gap:9px;align-items:center}.row.wrap{flex-wrap:wrap}
@@ -434,7 +479,12 @@ textarea,input[type=text],input[type=email],input[type=password]{
   .desktop-nav{display:none}.hero{min-height:420px;border-radius:21px}.hero-inner{padding:30px 14px 22px}.greeting{font-size:52px}.tagline{font-size:20px}
   .coach-cta{min-width:92%;padding:16px 16px;font-size:20px}.quick-grid{grid-template-columns:repeat(2,1fr);gap:10px}.quick{min-height:108px}
   .dashboard-grid{grid-template-columns:1fr}.card{border-radius:18px;padding:17px}.progress-overview{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:13px}
-  .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}.chat{height:56vh}.composer{padding:10px}.composer .primary{min-width:66px}
+  .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}
+  .chat-shell{display:block;min-height:calc(100dvh - 245px)}.chat-main{min-height:calc(100dvh - 245px)}
+  .chat-sidebar{display:none;position:absolute;left:12px;right:12px;z-index:15;max-height:60vh;border:1px solid #244b6e;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.55)}
+  .chat-sidebar.open{display:block}.history-toggle{display:inline-flex}
+  .chat{height:calc(100dvh - 365px);min-height:360px;padding:14px 12px 120px}.msg{max-width:90%}
+  .composer-wrap{padding:8px 10px calc(10px + env(safe-area-inset-bottom))}.composer{padding:8px;border-radius:22px}.composer textarea{min-height:72px}.composer .primary{min-width:50px;width:50px;height:50px}
   .voice-grid{grid-template-columns:repeat(2,1fr)}.voice-controls{grid-template-columns:1fr}
   .bottom-nav{
     position:fixed;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;
@@ -541,10 +591,24 @@ const HTML = `<!doctype html>
       <button id="voiceMode" class="secondary">Live Voice</button>
     </div>
     <div id="textCoach">
-      <div id="chat" class="chat"></div>
-      <div class="composer">
-        <textarea id="message" rows="2" placeholder="What would be most useful to work through?"></textarea>
-        <button id="send" class="primary">Send</button>
+      <div class="chat-shell">
+        <aside class="chat-sidebar" id="chatSidebar">
+          <div class="chat-sidebar-top"><button id="newChat" class="primary new-chat">＋ New Chat</button></div>
+          <div id="chatHistory"></div>
+        </aside>
+        <div class="chat-main">
+          <div class="chat-current-head">
+            <button id="historyToggle" class="secondary history-toggle">☰</button>
+            <div class="chat-current-title" id="chatTitle">New chat</div>
+          </div>
+          <div id="chat" class="chat"></div>
+          <div class="composer-wrap">
+            <div class="composer">
+              <textarea id="message" rows="2" placeholder="Message JT Coach"></textarea>
+              <button id="send" class="primary" aria-label="Send">↑</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="voiceCoach" class="voice-panel" style="display:none">
@@ -670,6 +734,7 @@ const HTML = `<!doctype html>
 const JS = `
 let cfg={},data={},mode='signup',deferred=null,selectedMood=3;
 let selectedVoice='james',voicePc=null,voiceStream=null,voiceTimerId=null,voiceSeconds=0,voiceMuted=false,voiceAudio=null;
+let conversations=[],activeConversationId=null,activeMessages=[],chatStickToBottom=true;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 
 async function api(u,o={}){
@@ -682,7 +747,8 @@ async function api(u,o={}){
 function setActive(v){
   $$('.section').forEach(x=>x.classList.toggle('active',x.id===v));
   $$('[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
-  scrollTo(0,0)
+  scrollTo(0,0);
+  if(v==='coach')setTimeout(()=>{scrollChatBottom(false);$('#message')?.focus()},80)
 }
 $$('[data-v]').forEach(b=>b.onclick=()=>setActive(b.dataset.v));
 
@@ -698,7 +764,11 @@ async function boot(){
   if(!cfg.user){$('#auth').classList.add('show');return}
   await load()
 }
-async function load(){data=await api('/api/data');render()}
+async function load(){
+  data=await api('/api/data');
+  conversations=await api('/api/conversations');
+  render();
+}
 
 function render(){
   const fn=firstName(data.user.name);
@@ -734,9 +804,8 @@ function render(){
     $('#focusPrompt').textContent='Open Goals and add one meaningful focus.'
   }
 
-  const msgs=data.messages.length?data.messages:[{role:'assistant',content:'What would be most useful to work through today?'}];
-  $('#chat').innerHTML=msgs.map(m=>'<div class="msg '+m.role+'">'+esc(m.content)+'</div>').join('');
-  $('#chat').scrollTop=$('#chat').scrollHeight;
+  renderConversationList();
+  renderActiveChat();
 
   const goalHtml=data.goals.length?data.goals.map(g=>'<div class="item"><div class="goal-row"><div><strong>'+esc(g.title)+'</strong><div class="muted" style="font-size:12px">'+(g.status==='complete'?'Complete':'Active')+'</div><input type="range" min="0" max="100" value="'+g.progress+'" onchange="goalProgress('+g.id+',this.value)"></div><strong>'+g.progress+'%</strong></div></div>').join(''):'<div class="item muted">No goals yet. Add one above.</div>';
   $('#goalsList').innerHTML=goalHtml;
@@ -744,6 +813,76 @@ function render(){
 
   $('#journalList').innerHTML=data.journal.length?data.journal.map(j=>'<div class="item"><strong>'+esc(j.title||'Journal entry')+'</strong><p>'+esc(j.content)+'</p></div>').join(''):'<div class="item muted">Your saved reflections will appear here.</div>'
 }
+
+
+function dateGroup(iso){
+  const d=new Date(iso), nowD=new Date();
+  const today=new Date(nowD.getFullYear(),nowD.getMonth(),nowD.getDate());
+  const that=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  const days=Math.round((today-that)/86400000);
+  if(days===0)return 'Today';
+  if(days===1)return 'Yesterday';
+  if(days<7)return 'Previous 7 Days';
+  if(days<30)return 'Previous 30 Days';
+  return d.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+}
+function renderConversationList(){
+  const groups={};
+  conversations.forEach(c=>{
+    const g=dateGroup(c.updated_at||c.created_at);
+    (groups[g] ||= []).push(c);
+  });
+  $('#chatHistory').innerHTML=Object.entries(groups).map(([g,items])=>
+    '<div class="chat-group"><div class="chat-group-title">'+esc(g)+'</div>'+
+    items.map(c=>'<button class="chat-history-btn '+(Number(c.id)===Number(activeConversationId)?'active':'')+'" data-chat-id="'+c.id+'">'+esc(c.title||'New chat')+'</button>').join('')+
+    '</div>'
+  ).join('') || '<div class="muted" style="padding:12px 8px">Your conversations will appear here.</div>';
+  $$('.chat-history-btn').forEach(b=>b.onclick=()=>openConversation(Number(b.dataset.chatId)));
+}
+function renderActiveChat(){
+  $('#chatTitle').textContent=activeConversationId
+    ? (conversations.find(c=>Number(c.id)===Number(activeConversationId))?.title||'Chat')
+    : 'New chat';
+  if(!activeMessages.length){
+    $('#chat').innerHTML='<div class="chat-empty"><div><strong>What would you like to work through?</strong><span>Start a new coaching conversation below.</span></div></div>';
+  }else{
+    $('#chat').innerHTML=activeMessages.map(m=>'<div class="msg '+m.role+'">'+esc(m.content)+'</div>').join('');
+  }
+  requestAnimationFrame(()=>scrollChatBottom(false));
+}
+function scrollChatBottom(smooth=true){
+  const el=$('#chat'); if(!el)return;
+  el.scrollTo({top:el.scrollHeight,behavior:smooth?'smooth':'auto'});
+}
+async function openConversation(id){
+  activeConversationId=id;
+  activeMessages=await api('/api/conversations/'+id+'/messages');
+  chatStickToBottom=true;
+  renderConversationList();renderActiveChat();
+  $('#chatSidebar').classList.remove('open');
+}
+function newConversation(){
+  activeConversationId=null;activeMessages=[];chatStickToBottom=true;
+  renderConversationList();renderActiveChat();
+  $('#message').value='';resizeComposer();
+  $('#chatSidebar').classList.remove('open');
+  setTimeout(()=>$('#message').focus(),50);
+}
+function resizeComposer(){
+  const t=$('#message'); if(!t)return;
+  t.style.height='auto';
+  t.style.height=Math.min(t.scrollHeight,190)+'px';
+}
+$('#chat').addEventListener('scroll',()=>{
+  const el=$('#chat');
+  chatStickToBottom=(el.scrollHeight-el.scrollTop-el.clientHeight)<90;
+});
+$('#message').addEventListener('input',resizeComposer);
+$('#message').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#send').click()}
+});
+$('#newChat').onclick=newConversation;
+$('#historyToggle').onclick=()=>$('#chatSidebar').classList.toggle('open');
 
 window.goalProgress=async(id,p)=>{await api('/api/goals/'+id,{method:'PATCH',body:JSON.stringify({progress:Number(p)})});await load()};
 
@@ -755,20 +894,27 @@ $('#energy').oninput=()=>$('#energyVal').textContent=$('#energy').value+' / 5';
 
 $('#send').onclick=async()=>{
   const m=$('#message').value.trim(); if(!m)return;
-  $('#message').value='';
-  $('#chat').innerHTML+='<div class="msg user">'+esc(m)+'</div>';
-  $('#chat').scrollTop=$('#chat').scrollHeight;
-  $('#send').disabled=true; $('#send').textContent='...';
+  $('#message').value='';resizeComposer();
+  activeMessages.push({role:'user',content:m});
+  renderActiveChat();scrollChatBottom(true);
+  $('#send').disabled=true; $('#send').textContent='…';
   try{
-    const d=await api('/api/coach',{method:'POST',body:JSON.stringify({message:m})});
-    $('#chat').innerHTML+='<div class="msg assistant">'+esc(d.reply)+'</div>';
-    $('#chat').scrollTop=$('#chat').scrollHeight;
-    await load()
+    const d=await api('/api/coach',{method:'POST',body:JSON.stringify({message:m,conversationId:activeConversationId})});
+    if(!activeConversationId)activeConversationId=Number(d.conversationId);
+    activeMessages.push({role:'assistant',content:d.reply});
+    conversations=await api('/api/conversations');
+    renderConversationList();
+    $('#chatTitle').textContent=d.title||conversations.find(c=>Number(c.id)===Number(activeConversationId))?.title||'Chat';
+    if(chatStickToBottom)scrollChatBottom(true);
+    data.usedToday=Math.min(data.limit,(data.usedToday||0)+1);
+    $('#use').textContent=data.usedToday+' / '+data.limit;
   }catch(e){
+    activeMessages=activeMessages.filter((x,i)=>!(i===activeMessages.length-1&&x.role==='user'&&x.content===m));
+    renderActiveChat();
     if(e.message.includes('free messages')){
       if(confirm("You've completed today's free coaching messages. View JT Coaching Pro?")) setActive('plans')
     }else alert(e.message)
-  }finally{$('#send').disabled=false;$('#send').textContent='Send'}
+  }finally{$('#send').disabled=false;$('#send').textContent='↑'}
 };
 
 $('#addGoal').onclick=async()=>{
@@ -1027,17 +1173,31 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/') && !u) return json(res, 401, { error:'Please sign in.' });
 
     if (url.pathname === '/api/data' && req.method === 'GET') {
-      const [g,j,c,m,usedToday] = await Promise.all([
+      const [g,j,c,usedToday] = await Promise.all([
         q('SELECT * FROM goals WHERE user_id=$1 ORDER BY id DESC',[u.id]),
         q('SELECT * FROM journal WHERE user_id=$1 ORDER BY id DESC LIMIT 100',[u.id]),
         q('SELECT * FROM checkins WHERE user_id=$1 ORDER BY id DESC LIMIT 60',[u.id]),
-        q('SELECT role,content,created_at FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 30',[u.id]),
         usage(u.id)
       ]);
       return json(res, 200, {
         user: publicUser(u), goals:g.rows, journal:j.rows, checkins:c.rows,
-        messages:m.rows.reverse(), usedToday, limit:u.plan === 'pro' ? PRO : FREE
+        usedToday, limit:u.plan === 'pro' ? PRO : FREE
       });
+    }
+
+
+    if (url.pathname === '/api/conversations' && req.method === 'GET') {
+      const r = await q('SELECT id,title,created_at,updated_at FROM conversations WHERE user_id=$1 ORDER BY updated_at DESC,id DESC LIMIT 200',[u.id]);
+      return json(res,200,r.rows);
+    }
+
+    const conversationMessagesMatch = url.pathname.match(/^\/api\/conversations\/(\d+)\/messages$/);
+    if (conversationMessagesMatch && req.method === 'GET') {
+      const id=Number(conversationMessagesMatch[1]);
+      const own=await q('SELECT id FROM conversations WHERE id=$1 AND user_id=$2',[id,u.id]);
+      if(!own.rows[0])return json(res,404,{error:'Conversation not found.'});
+      const r=await q('SELECT role,content,created_at FROM messages WHERE user_id=$1 AND conversation_id=$2 ORDER BY id ASC',[u.id,id]);
+      return json(res,200,r.rows);
     }
 
     if (url.pathname === '/api/goals' && req.method === 'POST') {
@@ -1082,12 +1242,24 @@ const server = http.createServer(async (req, res) => {
       const used = await usage(u.id);
       if (used >= lim) return json(res,402,{error:u.plan==='pro'?'Daily fair-use limit reached.':'You have used today’s free messages. Upgrade to Pro for more.'});
 
-      if (crisis.test(m))
-        return json(res,200,{reply:'What you wrote may involve immediate safety. JT Coaching is not crisis care. If you might act on thoughts of harming yourself or someone else, call local emergency services now or go to the nearest emergency department. If possible, contact a trusted person and stay with someone rather than being alone.'});
+      let conversationId=Number(b.conversationId)||null;
+      let title='New chat';
+      if(conversationId){
+        const own=await q('SELECT id,title FROM conversations WHERE id=$1 AND user_id=$2',[conversationId,u.id]);
+        if(!own.rows[0])return json(res,404,{error:'Conversation not found.'});
+        title=own.rows[0].title;
+      }else{
+        title=conversationTitle(m);
+        const cr=await q('INSERT INTO conversations(user_id,title,created_at,updated_at) VALUES($1,$2,$3,$4) RETURNING id',[u.id,title,now(),now()]);
+        conversationId=Number(cr.rows[0].id);
+      }
 
-      const hr = await q('SELECT role,content FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 14',[u.id]);
+      if (crisis.test(m))
+        return json(res,200,{reply:'What you wrote may involve immediate safety. JT Coaching is not crisis care. If you might act on thoughts of harming yourself or someone else, call local emergency services now or go to the nearest emergency department. If possible, contact a trusted person and stay with someone rather than being alone.',conversationId,title});
+
+      const hr = await q('SELECT role,content FROM messages WHERE user_id=$1 AND conversation_id=$2 ORDER BY id DESC LIMIT 14',[u.id,conversationId]);
       const hist = hr.rows.reverse();
-      await q('INSERT INTO messages(user_id,role,content,created_at) VALUES($1,$2,$3,$4)',[u.id,'user',m,now()]);
+      await q('INSERT INTO messages(user_id,conversation_id,role,content,created_at) VALUES($1,$2,$3,$4,$5)',[u.id,conversationId,'user',m,now()]);
 
       let reply;
       if (!process.env.OPENAI_API_KEY) {
@@ -1106,11 +1278,11 @@ const server = http.createServer(async (req, res) => {
           || d.output_text || 'I could not generate a response.';
       }
 
-      await q('INSERT INTO messages(user_id,role,content,created_at) VALUES($1,$2,$3,$4)',[u.id,'assistant',reply,now()]);
+      await q('INSERT INTO messages(user_id,conversation_id,role,content,created_at) VALUES($1,$2,$3,$4,$5)',[u.id,conversationId,'assistant',reply,now()]);
+      await q('UPDATE conversations SET updated_at=$1 WHERE id=$2 AND user_id=$3',[now(),conversationId,u.id]);
       await inc(u.id);
-      return json(res,200,{reply});
+      return json(res,200,{reply,conversationId,title});
     }
-
 
     if (url.pathname === '/api/voice/sample' && req.method === 'POST') {
       if (!process.env.OPENAI_API_KEY) return json(res,503,{error:'Live voice is not configured yet.'});
@@ -1192,7 +1364,7 @@ const server = http.createServer(async (req, res) => {
         q('SELECT * FROM goals WHERE user_id=$1',[u.id]),
         q('SELECT * FROM journal WHERE user_id=$1',[u.id]),
         q('SELECT * FROM checkins WHERE user_id=$1',[u.id]),
-        q('SELECT role,content,created_at FROM messages WHERE user_id=$1',[u.id])
+        q('SELECT conversation_id,role,content,created_at FROM messages WHERE user_id=$1',[u.id])
       ]);
       res.setHeader('Content-Disposition','attachment; filename="jt-coaching-data.json"');
       return json(res,200,{exportedAt:now(),account:publicUser(u),goals:g.rows,journal:j.rows,checkins:c.rows,messages:m.rows});
