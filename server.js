@@ -871,6 +871,20 @@ $('#startVoice').onclick=async()=>{
     const audio=document.createElement('audio');audio.autoplay=true;
     voicePc.ontrack=e=>{audio.srcObject=e.streams[0]};
     const dc=voicePc.createDataChannel('oai-events');
+    let realtimeSetup=null;
+    dc.onopen=()=>{
+      if(!realtimeSetup)return;
+      dc.send(JSON.stringify({
+        type:'session.update',
+        session:{
+          type:'realtime',
+          model:realtimeSetup.model,
+          output_modalities:['audio'],
+          instructions:realtimeSetup.instructions,
+          audio:{output:{voice:realtimeSetup.voice}}
+        }
+      }));
+    };
     dc.onmessage=e=>{
       try{
         const ev=JSON.parse(e.data);
@@ -884,7 +898,20 @@ $('#startVoice').onclick=async()=>{
     await voicePc.setLocalDescription(offer);
     $('#voiceStatus').textContent='Connecting to JT Coach…';
     const d=await api('/api/voice/session',{method:'POST',body:JSON.stringify({coach:selectedVoice,sdp:offer.sdp})});
+    realtimeSetup={model:d.model,voice:d.voice,instructions:d.instructions};
     await voicePc.setRemoteDescription({type:'answer',sdp:d.sdp});
+    if(dc.readyState==='open' && realtimeSetup){
+      dc.send(JSON.stringify({
+        type:'session.update',
+        session:{
+          type:'realtime',
+          model:realtimeSetup.model,
+          output_modalities:['audio'],
+          instructions:realtimeSetup.instructions,
+          audio:{output:{voice:realtimeSetup.voice}}
+        }
+      }));
+    }
     voiceSeconds=Number(d.maxSeconds||180);
     $('#voiceTimer').textContent=fmtTime(voiceSeconds);
     const nm=selectedVoice.charAt(0).toUpperCase()+selectedVoice.slice(1);
@@ -1114,18 +1141,18 @@ const server = http.createServer(async (req, res) => {
         return json(res,402,{error:'Your complimentary Live Coaching preview has already been used. Upgrade to Pro to continue.'});
 
       const instructions = await voiceInstructions(u, coach.key);
-      const sessionConfig = {
-        type:'realtime',
-        model:REALTIME_MODEL,
-        output_modalities:['audio'],
-        instructions,
-        audio:{ output:{ voice:coach.id } }
-      };
 
-      const r = await fetch('https://api.openai.com/v1/realtime/calls',{
+      // OpenAI's Realtime WebRTC call endpoint expects the SDP offer itself
+      // as application/sdp. Session instructions are applied over the
+      // WebRTC data channel immediately after the connection opens.
+      const realtimeUrl = 'https://api.openai.com/v1/realtime/calls?model=' + encodeURIComponent(REALTIME_MODEL);
+      const r = await fetch(realtimeUrl,{
         method:'POST',
-        headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},
-        body:JSON.stringify({sdp,session:sessionConfig})
+        headers:{
+          authorization:'Bearer '+process.env.OPENAI_API_KEY,
+          'content-type':'application/sdp'
+        },
+        body:sdp
       });
       if (!r.ok) {
         console.error('Realtime OpenAI error', r.status, await r.text());
@@ -1137,6 +1164,9 @@ const server = http.createServer(async (req, res) => {
       return json(res,200,{
         sdp:answerSdp,
         coach:coach.key,
+        voice:coach.id,
+        instructions,
+        model:REALTIME_MODEL,
         maxSeconds:u.plan === 'pro' ? PRO_VOICE_SESSION_SECONDS : FREE_VOICE_PREVIEW_SECONDS,
         preview:u.plan !== 'pro'
       });
