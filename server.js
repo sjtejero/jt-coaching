@@ -6,6 +6,9 @@ const PORT = Number(process.env.PORT || 3000);
 const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-terra';
 const FREE = Number(process.env.FREE_DAILY_MESSAGES || 5);
 const PRO = Number(process.env.PRO_DAILY_MESSAGES || 100);
+const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1-mini';
+const FREE_VOICE_PREVIEW_SECONDS = Number(process.env.FREE_VOICE_PREVIEW_SECONDS || 180);
+const PRO_VOICE_SESSION_SECONDS = Number(process.env.PRO_VOICE_SESSION_SECONDS || 1800);
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
 
@@ -68,6 +71,8 @@ async function initDb() {
       count INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY(user_id, day)
     );
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_coach TEXT NOT NULL DEFAULT 'james';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_preview_used BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 }
 await initDb();
@@ -113,7 +118,9 @@ function publicUser(u) {
     email: u.email,
     name: u.name,
     plan: u.plan,
-    subscriptionStatus: u.subscription_status || null
+    subscriptionStatus: u.subscription_status || null,
+    voiceCoach: u.voice_coach || 'james',
+    voicePreviewUsed: !!u.voice_preview_used
   };
 }
 async function session(res, id) {
@@ -139,6 +146,10 @@ function json(res, status, obj) {
 }
 function text(res, status, body, type = 'text/html; charset=utf-8') {
   res.writeHead(status, { 'content-type': type });
+  res.end(body);
+}
+function binary(res, status, body, type) {
+  res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
   res.end(body);
 }
 async function body(req) {
@@ -205,6 +216,52 @@ FOUNDER EXPERIENCE CONTEXT
 The following material describes experiences and lessons from JT Coaching's human founder. It is background for the philosophy, not a script. Never impersonate the founder or imply that you personally lived these events. Use only the parts genuinely relevant to the user's situation.
 
 ${FOUNDER_CONTEXT}`;
+}
+
+
+const VOICE_COACHES = {
+  james:  { id:'cedar',   name:'James',  label:'Male',   feel:'Grounded • Reflective • Direct' },
+  marcus: { id:'ash',     name:'Marcus', label:'Male',   feel:'Deep • Calm • Steady' },
+  daniel: { id:'echo',    name:'Daniel', label:'Male',   feel:'Warm • Conversational • Encouraging' },
+  sophia: { id:'marin',   name:'Sophia', label:'Female', feel:'Calm • Reflective • Clear' },
+  maya:   { id:'coral',   name:'Maya',   label:'Female', feel:'Warm • Supportive • Direct' },
+  claire: { id:'shimmer', name:'Claire', label:'Female', feel:'Clear • Confident • Practical' }
+};
+
+function voiceCoach(key) {
+  return VOICE_COACHES[key] ? { key, ...VOICE_COACHES[key] } : { key:'james', ...VOICE_COACHES.james };
+}
+
+async function voiceInstructions(u, coachKey) {
+  const coach = voiceCoach(coachKey);
+  const [mr, gr, cr] = await Promise.all([
+    q('SELECT role,content FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT 10', [u.id]),
+    q("SELECT title,progress,status FROM goals WHERE user_id=$1 ORDER BY id DESC LIMIT 5", [u.id]),
+    q('SELECT mood,energy,note,created_at FROM checkins WHERE user_id=$1 ORDER BY id DESC LIMIT 3', [u.id])
+  ]);
+  const recent = mr.rows.reverse().map(x => `${x.role}: ${x.content}`).join('\n');
+  const goals = gr.rows.map(x => `- ${x.title} (${x.progress}% ${x.status})`).join('\n');
+  const checkins = cr.rows.map(x => `- mood ${x.mood}/5, energy ${x.energy}/5${x.note ? `, note: ${x.note}` : ''}`).join('\n');
+  return `${coachingInstructions()}
+
+LIVE VOICE COACHING
+You are now speaking in a live, natural voice conversation with the user.
+Keep most turns concise and conversational so the user has room to speak. Ask one useful question at a time when possible.
+The selected voice is branded "${coach.name}". This is only a voice label. Never claim to be James Tejero, the human founder, or any other human.
+If the user appears to be in immediate danger or may imminently harm themselves or someone else, clearly direct them to local emergency services or an appropriate crisis service and encourage immediate human support.
+Do not overuse the founder's story. Use founder material only when strongly relevant and always attribute it as the founder's experience, then return focus to the user.
+
+USER CONTEXT
+Name: ${u.name}
+Plan: ${u.plan}
+Recent text-coaching history:
+${recent || '(none yet)'}
+
+Current/recent goals:
+${goals || '(none yet)'}
+
+Recent check-ins:
+${checkins || '(none yet)'}`;
 }
 
 const crisis = /(suicid|kill myself|end my life|hurt myself|self[- ]?harm|harm myself|kill someone|hurt someone)/i;
@@ -355,12 +412,30 @@ textarea,input[type=text],input[type=email],input[type=password]{
 .bottom-nav{display:none}
 .badge{font-size:10px;border:1px solid #285173;border-radius:999px;padding:4px 7px;color:#8dc8ff;background:#0d2033}
 .voice-coming{display:flex;gap:8px;align-items:center;justify-content:center}
+.coach-mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px;border-bottom:1px solid #1e3c59;background:#0a1724}
+.coach-mode-tabs button.active{border-color:#4baeff;background:#102947;color:#fff}
+.voice-panel{padding:18px;background:linear-gradient(180deg,#081522,#07111c)}
+.voice-hero{text-align:center;padding:10px 8px 18px}
+.voice-orb{width:92px;height:92px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;font-size:38px;background:radial-gradient(circle at 35% 30%,#4aa9ff,#0f4f91 52%,#0a2035 70%);border:1px solid #4aa9ff;box-shadow:0 0 34px rgba(42,145,244,.22)}
+.voice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0 16px}
+.voice-option{position:relative;text-align:left;border:1px solid #214765;background:#0b1927;color:#fff;border-radius:16px;padding:14px;min-height:112px}
+.voice-option.selected{border-color:#55b2ff;background:#102947;box-shadow:0 0 0 2px rgba(55,159,255,.12)}
+.voice-option .voice-name{font-size:17px;font-weight:800;display:block;margin-bottom:3px}
+.voice-option .voice-sex{font-size:10px;color:#79a8d2;letter-spacing:.16em;text-transform:uppercase}
+.voice-option .voice-feel{display:block;color:#93aabd;font-size:11px;line-height:1.35;margin-top:9px}
+.voice-controls{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.voice-status{text-align:center;color:#9fb3c5;font-size:13px;min-height:20px;margin:12px 0}
+.voice-timer{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:29px;font-weight:800;text-align:center;margin:8px 0}
+.voice-live{display:none}.voice-live.show{display:block}
+.voice-picker.hidden{display:none}
+.voice-note{text-align:center;color:#738da5;font-size:11px;line-height:1.45;margin-top:12px}
 @media(max-width:760px){
   .app{padding:10px 12px 100px}.topbar{min-height:68px}.brand-logo{width:58px;height:58px}.brand-copy h1{font-size:24px}.brand-copy p{font-size:8px;letter-spacing:.18em}
   .desktop-nav{display:none}.hero{min-height:420px;border-radius:21px}.hero-inner{padding:30px 14px 22px}.greeting{font-size:52px}.tagline{font-size:20px}
   .coach-cta{min-width:92%;padding:16px 16px;font-size:20px}.quick-grid{grid-template-columns:repeat(2,1fr);gap:10px}.quick{min-height:108px}
   .dashboard-grid{grid-template-columns:1fr}.card{border-radius:18px;padding:17px}.progress-overview{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:13px}
   .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}.chat{height:56vh}.composer{padding:10px}.composer .primary{min-width:66px}
+  .voice-grid{grid-template-columns:repeat(2,1fr)}.voice-controls{grid-template-columns:1fr}
   .bottom-nav{
     position:fixed;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;
     padding:7px;background:rgba(7,16,27,.95);backdrop-filter:blur(18px);border:1px solid #1e3f60;border-radius:20px;box-shadow:0 14px 45px rgba(0,0,0,.45)
@@ -459,12 +534,55 @@ const HTML = `<!doctype html>
   <div class="card chat-card">
     <div class="chat-head row" style="justify-content:space-between">
       <div><strong>JT Coach</strong><div class="muted" style="font-size:12px">Personal development coaching</div></div>
-      <div class="voice-coming"><span class="badge">VOICE COMING SOON</span></div>
+      <div class="voice-coming"><span class="badge">LIVE VOICE</span></div>
     </div>
-    <div id="chat" class="chat"></div>
-    <div class="composer">
-      <textarea id="message" rows="2" placeholder="What would be most useful to work through?"></textarea>
-      <button id="send" class="primary">Send</button>
+    <div class="coach-mode-tabs">
+      <button id="textMode" class="secondary active">Text Coaching</button>
+      <button id="voiceMode" class="secondary">Live Voice</button>
+    </div>
+    <div id="textCoach">
+      <div id="chat" class="chat"></div>
+      <div class="composer">
+        <textarea id="message" rows="2" placeholder="What would be most useful to work through?"></textarea>
+        <button id="send" class="primary">Send</button>
+      </div>
+    </div>
+    <div id="voiceCoach" class="voice-panel" style="display:none">
+      <div class="voice-picker" id="voicePicker">
+        <div class="voice-hero">
+          <div class="voice-orb">🎙</div>
+          <div class="kicker">Choose Your Coach's Voice</div>
+          <h2 style="margin:7px 0 5px">Live Coaching</h2>
+          <p class="muted" id="voiceOffer">Free accounts include one 3-minute live voice preview.</p>
+        </div>
+        <div class="voice-grid" id="voiceGrid">
+          <button class="voice-option selected" data-coach="james"><span class="voice-sex">Male · Signature</span><span class="voice-name">James</span><span class="voice-feel">Grounded • Reflective • Direct</span></button>
+          <button class="voice-option" data-coach="marcus"><span class="voice-sex">Male</span><span class="voice-name">Marcus</span><span class="voice-feel">Deep • Calm • Steady</span></button>
+          <button class="voice-option" data-coach="daniel"><span class="voice-sex">Male</span><span class="voice-name">Daniel</span><span class="voice-feel">Warm • Conversational • Encouraging</span></button>
+          <button class="voice-option" data-coach="sophia"><span class="voice-sex">Female</span><span class="voice-name">Sophia</span><span class="voice-feel">Calm • Reflective • Clear</span></button>
+          <button class="voice-option" data-coach="maya"><span class="voice-sex">Female</span><span class="voice-name">Maya</span><span class="voice-feel">Warm • Supportive • Direct</span></button>
+          <button class="voice-option" data-coach="claire"><span class="voice-sex">Female</span><span class="voice-name">Claire</span><span class="voice-feel">Clear • Confident • Practical</span></button>
+        </div>
+        <div class="voice-controls">
+          <button id="hearVoice" class="secondary">▶ Hear Voice Sample</button>
+          <button id="startVoice" class="primary">Start Live Coaching</button>
+        </div>
+        <div id="voiceStatus" class="voice-status"></div>
+        <div class="voice-note">Microphone permission is required. Voice selection changes how JT Coach sounds, not the JT Coaching philosophy.</div>
+      </div>
+      <div class="voice-live" id="voiceLive">
+        <div class="voice-hero">
+          <div class="voice-orb" id="liveOrb">●</div>
+          <div class="kicker" id="liveCoachName">James · Live</div>
+          <div class="voice-timer" id="voiceTimer">03:00</div>
+          <p class="muted" id="liveStatus">Listening… speak naturally. You can interrupt the coach.</p>
+        </div>
+        <div class="voice-controls">
+          <button id="muteVoice" class="secondary">Mute Microphone</button>
+          <button id="endVoice" class="primary">End Conversation</button>
+        </div>
+        <div class="voice-note">Voice conversations are live. Saving voice transcripts to coaching history will be added in a later update.</div>
+      </div>
     </div>
   </div>
 </section>
@@ -504,7 +622,7 @@ const HTML = `<!doctype html>
   <div class="page-head"><div class="kicker">Membership</div><h2>JT Coaching Pro</h2><p>Go deeper when you're ready.</p></div>
   <div class="dashboard-grid">
     <div class="card"><div class="kicker">Free</div><h2 style="font-size:38px">$0</h2><p class="muted">${FREE} coaching messages/day<br>Up to 3 active goals<br>Journal and check-ins</p></div>
-    <div class="card pro-card"><div class="kicker">Pro</div><h2 style="font-size:38px">${process.env.PRO_PRICE_LABEL || '$19/month'}</h2><p class="muted">Expanded coaching<br>Unlimited goals<br>Full history<br>Live voice planned</p><button id="upgrade" class="primary">Upgrade to Pro</button></div>
+    <div class="card pro-card"><div class="kicker">Pro</div><h2 style="font-size:38px">${process.env.PRO_PRICE_LABEL || '$19/month'}</h2><p class="muted">Expanded coaching<br>Unlimited goals<br>Full history<br>Live voice coaching</p><button id="upgrade" class="primary">Upgrade to Pro</button></div>
   </div>
 </section>
 
@@ -551,6 +669,7 @@ const HTML = `<!doctype html>
 
 const JS = `
 let cfg={},data={},mode='signup',deferred=null,selectedMood=3;
+let selectedVoice='james',voicePc=null,voiceStream=null,voiceTimerId=null,voiceSeconds=0,voiceMuted=false,voiceAudio=null;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 
 async function api(u,o={}){
@@ -591,6 +710,17 @@ function render(){
   $('#use').textContent=data.usedToday+' / '+data.limit;
   $('#goalCount').textContent=data.goals.filter(g=>g.status==='active').length;
   $('#checkinCount').textContent=data.checkins.length;
+  selectedVoice=(data.user.voiceCoach||selectedVoice||'james');
+  $$('.voice-option').forEach(b=>b.classList.toggle('selected',b.dataset.coach===selectedVoice));
+  if(data.user.plan==='pro'){
+    $('#voiceOffer').textContent='Live voice coaching is included with Pro, subject to fair-use limits.';
+  }else if(data.user.voicePreviewUsed){
+    $('#voiceOffer').textContent='Your complimentary live voice preview has been used. Upgrade to Pro to continue with live voice.';
+    $('#startVoice').textContent='View JT Coaching Pro';
+  }else{
+    $('#voiceOffer').textContent='Free accounts include one 3-minute live voice preview.';
+    $('#startVoice').textContent='Start 3-Minute Preview';
+  }
 
   const focus=data.goals.find(g=>g.status==='active')||data.goals[0];
   if(focus){
@@ -669,6 +799,109 @@ $('#delete').onclick=async()=>{if(confirm('Permanently delete your JT Coaching a
 $('#export').onclick=()=>location.href='/api/export';
 $('#upgrade').onclick=async()=>{try{const d=await api('/api/billing/checkout',{method:'POST'});location.href=d.url}catch(e){alert(e.message)}};
 
+
+$('#textMode').onclick=()=>{
+  $('#textMode').classList.add('active');$('#voiceMode').classList.remove('active');
+  $('#textCoach').style.display='block';$('#voiceCoach').style.display='none'
+};
+$('#voiceMode').onclick=()=>{
+  $('#voiceMode').classList.add('active');$('#textMode').classList.remove('active');
+  $('#textCoach').style.display='none';$('#voiceCoach').style.display='block'
+};
+
+$$('.voice-option').forEach(b=>b.onclick=()=>{
+  if(voicePc)return;
+  selectedVoice=b.dataset.coach;
+  $$('.voice-option').forEach(x=>x.classList.toggle('selected',x===b));
+  $('#voiceStatus').textContent='';
+});
+
+$('#hearVoice').onclick=async()=>{
+  const b=$('#hearVoice'); b.disabled=true; $('#voiceStatus').textContent='Loading voice sample…';
+  try{
+    const r=await fetch('/api/voice/sample',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({coach:selectedVoice})});
+    if(!r.ok){let d={};try{d=await r.json()}catch{};throw new Error(d.error||'Voice sample unavailable')}
+    const blob=await r.blob();
+    if(voiceAudio)voiceAudio.pause();
+    voiceAudio=new Audio(URL.createObjectURL(blob));
+    await voiceAudio.play();
+    $('#voiceStatus').textContent='Sample playing';
+    voiceAudio.onended=()=>$('#voiceStatus').textContent='';
+  }catch(e){$('#voiceStatus').textContent=e.message}
+  finally{b.disabled=false}
+};
+
+function fmtTime(s){
+  s=Math.max(0,Math.floor(s));const m=Math.floor(s/60),x=s%60;
+  return String(m).padStart(2,'0')+':'+String(x).padStart(2,'0')
+}
+function cleanupVoice(){
+  if(voiceTimerId){clearInterval(voiceTimerId);voiceTimerId=null}
+  if(voicePc){try{voicePc.close()}catch{};voicePc=null}
+  if(voiceStream){voiceStream.getTracks().forEach(t=>t.stop());voiceStream=null}
+  voiceMuted=false;
+  $('#muteVoice').textContent='Mute Microphone';
+}
+function showVoicePicker(){
+  $('#voiceLive').classList.remove('show');$('#voicePicker').classList.remove('hidden');
+}
+async function endVoice(showUpgrade=false){
+  cleanupVoice();showVoicePicker();$('#voiceStatus').textContent='Conversation ended.';
+  try{await load()}catch{}
+  if(showUpgrade){setActive('plans');alert('Your complimentary Live Coaching preview has ended. Upgrade to JT Coaching Pro to continue with live voice.')}
+}
+
+$('#endVoice').onclick=()=>endVoice(false);
+$('#muteVoice').onclick=()=>{
+  if(!voiceStream)return;
+  voiceMuted=!voiceMuted;
+  voiceStream.getAudioTracks().forEach(t=>t.enabled=!voiceMuted);
+  $('#muteVoice').textContent=voiceMuted?'Unmute Microphone':'Mute Microphone';
+  $('#liveStatus').textContent=voiceMuted?'Microphone muted':'Listening… speak naturally. You can interrupt the coach.'
+};
+
+$('#startVoice').onclick=async()=>{
+  if(data.user.plan!=='pro' && data.user.voicePreviewUsed){setActive('plans');return}
+  if(!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection){alert('Live voice is not supported in this browser. Try the latest Chrome or Safari.');return}
+  const b=$('#startVoice');b.disabled=true;$('#voiceStatus').textContent='Requesting microphone access…';
+  try{
+    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    voicePc=new RTCPeerConnection();
+    voiceStream.getTracks().forEach(t=>voicePc.addTrack(t,voiceStream));
+    const audio=document.createElement('audio');audio.autoplay=true;
+    voicePc.ontrack=e=>{audio.srcObject=e.streams[0]};
+    const dc=voicePc.createDataChannel('oai-events');
+    dc.onmessage=e=>{
+      try{
+        const ev=JSON.parse(e.data);
+        if(ev.type==='input_audio_buffer.speech_started')$('#liveStatus').textContent='Listening…';
+        if(ev.type==='response.audio.delta'||ev.type==='response.output_audio.delta')$('#liveStatus').textContent='JT Coach is speaking…';
+        if(ev.type==='response.done')$('#liveStatus').textContent='Listening… speak naturally. You can interrupt the coach.';
+        if(ev.type==='error')$('#liveStatus').textContent='Voice connection error. Please end and try again.';
+      }catch{}
+    };
+    const offer=await voicePc.createOffer();
+    await voicePc.setLocalDescription(offer);
+    $('#voiceStatus').textContent='Connecting to JT Coach…';
+    const d=await api('/api/voice/session',{method:'POST',body:JSON.stringify({coach:selectedVoice,sdp:offer.sdp})});
+    await voicePc.setRemoteDescription({type:'answer',sdp:d.sdp});
+    voiceSeconds=Number(d.maxSeconds||180);
+    $('#voiceTimer').textContent=fmtTime(voiceSeconds);
+    const nm=selectedVoice.charAt(0).toUpperCase()+selectedVoice.slice(1);
+    $('#liveCoachName').textContent=nm+' · Live';
+    $('#voicePicker').classList.add('hidden');$('#voiceLive').classList.add('show');
+    $('#liveStatus').textContent='Listening… speak naturally. You can interrupt the coach.';
+    voiceTimerId=setInterval(()=>{
+      voiceSeconds-=1;$('#voiceTimer').textContent=fmtTime(voiceSeconds);
+      if(voiceSeconds===30 && data.user.plan!=='pro')$('#liveStatus').textContent='30 seconds remain in your complimentary preview.';
+      if(voiceSeconds<=0)endVoice(data.user.plan!=='pro');
+    },1000);
+  }catch(e){
+    cleanupVoice();
+    $('#voiceStatus').textContent=e.message.includes('permission')?'Microphone permission was not granted.':e.message;
+  }finally{b.disabled=false}
+};
+
 addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e});
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js');
 boot();
@@ -725,7 +958,9 @@ const server = http.createServer(async (req, res) => {
         user: publicUser(u), freeDailyMessages: FREE, proDailyMessages: PRO,
         proPrice: process.env.PRO_PRICE_LABEL || '$19/month',
         aiConfigured: !!process.env.OPENAI_API_KEY,
-        stripeConfigured: !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID)
+        stripeConfigured: !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID),
+        voiceConfigured: !!process.env.OPENAI_API_KEY,
+        freeVoicePreviewSeconds: FREE_VOICE_PREVIEW_SECONDS
       });
     }
 
@@ -849,6 +1084,64 @@ const server = http.createServer(async (req, res) => {
       return json(res,200,{reply});
     }
 
+
+    if (url.pathname === '/api/voice/sample' && req.method === 'POST') {
+      if (!process.env.OPENAI_API_KEY) return json(res,503,{error:'Live voice is not configured yet.'});
+      const b = await body(req);
+      const coach = voiceCoach(String(b.coach || u.voice_coach || 'james').toLowerCase());
+      const sampleText = `Hi, I'm ${coach.name}, one of the voices for JT Coach. Bring me something real you're working through, and we'll find the next clear step together.`;
+      const r = await fetch('https://api.openai.com/v1/audio/speech',{
+        method:'POST',
+        headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},
+        body:JSON.stringify({model:'gpt-4o-mini-tts',voice:coach.id,input:sampleText,format:'mp3'})
+      });
+      if (!r.ok) {
+        console.error('Voice sample OpenAI error', r.status, await r.text());
+        return json(res,502,{error:'Voice sample is temporarily unavailable.'});
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      return binary(res,200,buf,'audio/mpeg');
+    }
+
+    if (url.pathname === '/api/voice/session' && req.method === 'POST') {
+      if (!process.env.OPENAI_API_KEY) return json(res,503,{error:'Live voice is not configured yet.'});
+      const b = await body(req);
+      const sdp = String(b.sdp || '');
+      if (!sdp.startsWith('v=0')) return json(res,400,{error:'Voice connection could not be started.'});
+      const coach = voiceCoach(String(b.coach || u.voice_coach || 'james').toLowerCase());
+
+      if (u.plan !== 'pro' && u.voice_preview_used)
+        return json(res,402,{error:'Your complimentary Live Coaching preview has already been used. Upgrade to Pro to continue.'});
+
+      const instructions = await voiceInstructions(u, coach.key);
+      const sessionConfig = {
+        type:'realtime',
+        model:REALTIME_MODEL,
+        output_modalities:['audio'],
+        instructions,
+        audio:{ output:{ voice:coach.id } }
+      };
+
+      const r = await fetch('https://api.openai.com/v1/realtime/calls',{
+        method:'POST',
+        headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},
+        body:JSON.stringify({sdp,session:sessionConfig})
+      });
+      if (!r.ok) {
+        console.error('Realtime OpenAI error', r.status, await r.text());
+        return json(res,502,{error:'JT Coach Live is temporarily unavailable.'});
+      }
+      const answerSdp = await r.text();
+      await q('UPDATE users SET voice_coach=$1, voice_preview_used=CASE WHEN plan=$2 THEN TRUE ELSE voice_preview_used END WHERE id=$3',
+        [coach.key,'free',u.id]);
+      return json(res,200,{
+        sdp:answerSdp,
+        coach:coach.key,
+        maxSeconds:u.plan === 'pro' ? PRO_VOICE_SESSION_SECONDS : FREE_VOICE_PREVIEW_SECONDS,
+        preview:u.plan !== 'pro'
+      });
+    }
+
     if (url.pathname === '/api/billing/checkout' && req.method === 'POST') {
       if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_PRICE_ID) return json(res,503,{error:'Billing is not configured yet.'});
       const base = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
@@ -882,7 +1175,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/health')
-      return json(res,200,{ok:true,aiConfigured:!!process.env.OPENAI_API_KEY,stripeConfigured:!!process.env.STRIPE_SECRET_KEY});
+      return json(res,200,{ok:true,aiConfigured:!!process.env.OPENAI_API_KEY,voiceConfigured:!!process.env.OPENAI_API_KEY,stripeConfigured:!!process.env.STRIPE_SECRET_KEY});
 
     return json(res,404,{error:'Not found'});
   } catch(e) {
