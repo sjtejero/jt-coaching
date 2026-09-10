@@ -411,54 +411,37 @@ textarea,input[type=text],input[type=email],input[type=password]{
 .quote blockquote{font-family:Georgia,serif;font-style:italic;font-size:clamp(21px,3vw,29px);margin:0;color:#f5f8fb}
 .quote small{display:block;margin-top:16px;color:#7396bb;letter-spacing:.22em}
 .page-head{margin:28px 0 16px}.page-head h2{font-family:Georgia,serif;font-size:37px;margin:6px 0}.page-head p{color:#96abc0;margin:0}
-.chat-card{padding:0;overflow:hidden}.chat-head{padding:14px 16px;border-bottom:1px solid #1e3c59}
-.chat-shell{display:grid;grid-template-columns:270px 1fr;min-height:620px;background:#07111c}
-.chat-sidebar{border-right:1px solid #1e3c59;background:#091521;padding:12px;overflow:auto;max-height:70vh}
-.chat-sidebar-top{display:flex;gap:8px;position:sticky;top:0;background:#091521;padding-bottom:10px;z-index:2}
+.chat-card{padding:0;overflow:hidden;border:0;background:#07111c}
+.chat-head{display:none}
+.coach-mode-tabs{margin:0;border-bottom:1px solid #173650;background:#07111c;padding:8px 12px}
+#textCoach{position:relative}
+.chat-shell{position:relative;min-height:620px;background:#07111c}
+.chat-sidebar{position:absolute;inset:0 auto 0 0;width:min(86vw,330px);z-index:30;background:#0a1724;border-right:1px solid #244b6e;padding:12px;overflow:auto;transform:translateX(-105%);transition:transform .2s ease;box-shadow:18px 0 45px rgba(0,0,0,.45)}
+.chat-sidebar.open{transform:translateX(0)}
+.chat-sidebar-top{display:flex;gap:8px;position:sticky;top:0;background:#0a1724;padding-bottom:10px;z-index:2}
 .new-chat{flex:1}
 .chat-group{margin:14px 0}.chat-group-title{color:#718ca6;font-size:10px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;margin:0 8px 6px}
-.chat-history-btn{width:100%;text-align:left;border:0;background:transparent;color:#c9d8e7;border-radius:10px;padding:10px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-history-btn{width:100%;text-align:left;border:0;background:transparent;color:#c9d8e7;border-radius:10px;padding:11px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-history-btn:hover,.chat-history-btn.active{background:#10263a;color:#fff}
-.chat-main{min-width:0;display:flex;flex-direction:column;min-height:620px}
-.chat-current-head{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid #173650;background:#0a1724}
-.chat-current-title{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.history-toggle{display:none}
-.chat{height:52vh;min-height:390px;overflow:auto;padding:18px 18px 120px;background:linear-gradient(180deg,#081522,#07111c);scroll-behavior:smooth}
-.msg{max-width:82%;padding:13px 15px;border-radius:16px;margin:9px 0;white-space:pre-wrap;line-height:1.55}
-.msg.user{margin-left:auto;background:linear-gradient(180deg,#176fc7,#0d4d91);border-bottom-right-radius:5px}
-.msg.assistant{background:#102234;border:1px solid #204563;border-bottom-left-radius:5px}
-.composer-wrap{position:sticky;bottom:0;padding:10px 14px 14px;background:linear-gradient(180deg,rgba(7,17,28,0),#07111c 25%);z-index:5}
-.composer{display:flex;align-items:flex-end;gap:9px;padding:10px;border:1px solid #244c70;border-radius:24px;background:#0d1c2b;box-shadow:0 10px 34px rgba(0,0,0,.32)}
-.composer textarea{resize:none;min-height:62px;max-height:190px;border:0;background:transparent;padding:10px 8px;line-height:1.45;overflow-y:auto}
+.chat-backdrop{display:none;position:absolute;inset:0;z-index:25;background:rgba(0,0,0,.48)}
+.chat-backdrop.show{display:block}
+.chat-main{min-width:0;display:flex;flex-direction:column;height:min(72vh,760px);min-height:560px;background:#07111c}
+.chat-current-head{height:54px;display:grid;grid-template-columns:46px 1fr 46px;align-items:center;padding:0 8px;border-bottom:1px solid #173650;background:#07111c;flex:0 0 54px}
+.chat-current-title{text-align:center;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.history-toggle,.quick-new-chat{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;padding:0;border-radius:50%;font-size:20px}
+.chat{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px max(14px,calc((100% - 760px)/2)) 26px;background:#07111c;scroll-behavior:smooth}
+.msg{max-width:82%;padding:13px 15px;border-radius:18px;margin:10px 0;white-space:pre-wrap;line-height:1.55}
+.msg.user{margin-left:auto;background:#173a5d;border-bottom-right-radius:6px}
+.msg.assistant{max-width:92%;background:transparent;border:0;padding-left:4px;border-radius:0}
+.chat-empty{height:100%;display:grid;place-items:center;text-align:center;color:#8fa7bf;padding:30px}
+.chat-empty strong{color:#fff;font-family:Georgia,serif;font-size:29px;display:block;margin-bottom:8px}
+.typing{display:flex;gap:5px;align-items:center;color:#91abc3;padding:12px 4px}.typing span{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.1s infinite}.typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}@keyframes pulse{0%,70%,100%{opacity:.3}35%{opacity:1}}
+.composer-wrap{flex:0 0 auto;padding:8px max(12px,calc((100% - 780px)/2)) 14px;background:#07111c;z-index:5}
+.composer{display:flex;align-items:flex-end;gap:8px;padding:9px 9px 9px 14px;border:1px solid #2b4d69;border-radius:26px;background:#10202f;box-shadow:0 8px 28px rgba(0,0,0,.25)}
+.composer textarea{resize:none;min-height:54px;max-height:190px;border:0;background:transparent;padding:10px 4px;color:#fff;line-height:1.45;overflow-y:auto}
 .composer textarea:focus{outline:none}
-.composer .primary{min-width:52px;width:52px;height:52px;border-radius:50%;padding:0;font-size:20px;flex:0 0 52px}
-.chat-empty{min-height:100%;display:grid;place-items:center;text-align:center;color:#8fa7bf;padding:30px}.chat-empty strong{color:#fff;font-family:Georgia,serif;font-size:28px;display:block;margin-bottom:8px}
-.list{display:grid;gap:12px}.item{background:#0b1927;border:1px solid #1d3c5c;border-radius:16px;padding:15px}
-.item strong{font-size:17px}.item p{color:#a7b8c8;line-height:1.5}
-.row{display:flex;gap:9px;align-items:center}.row.wrap{flex-wrap:wrap}
-.goal-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
-.goal-row input[type=range]{margin-top:10px}
-.progress-overview{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-.stat strong{font-size:27px;display:block;margin-top:4px}.stat small{color:#819cb8}
-.pro-card{border-color:#2b5d8c;background:radial-gradient(500px 200px at 80% 0,rgba(44,133,221,.18),transparent 60%),linear-gradient(180deg,#0e2034,#0a1725)}
-.modal{position:fixed;inset:0;background:rgba(0,5,10,.82);display:none;align-items:center;justify-content:center;padding:18px;z-index:30}
-.modal.show{display:flex}.modal .card{max-width:460px;width:100%;margin:0}
-.auth-logo{
-      width:92px;height:92px;border-radius:50%;
-      object-fit:cover;object-position:center;
-      border:0;box-shadow:none;background:transparent;display:block;
-      margin:0 auto 14px;
-      clip-path:circle(38.5% at 50% 50%);
-      transform:scale(1.30)
-    }
-.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
-.auth-msg{min-height:20px;color:#ff9ca3}
-.footer{text-align:center;color:#6e89a4;font-size:12px;padding:30px 12px}.footer a{color:#8eb6dd}
-.bottom-nav{display:none}
-.badge{font-size:10px;border:1px solid #285173;border-radius:999px;padding:4px 7px;color:#8dc8ff;background:#0d2033}
-.voice-coming{display:flex;gap:8px;align-items:center;justify-content:center}
-.coach-mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px;border-bottom:1px solid #1e3c59;background:#0a1724}
-.coach-mode-tabs button.active{border-color:#4baeff;background:#102947;color:#fff}
+.composer .primary{min-width:48px;width:48px;height:48px;border-radius:50%;padding:0;font-size:21px;flex:0 0 48px}
+.chat-error{max-width:92%;margin:10px 0;color:#ffb6b6;background:#2a1519;border:1px solid #693039;border-radius:14px;padding:11px 13px}
 .voice-panel{padding:18px;background:linear-gradient(180deg,#081522,#07111c)}
 .voice-hero{text-align:center;padding:10px 8px 18px}
 .voice-orb{width:92px;height:92px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;font-size:38px;background:radial-gradient(circle at 35% 30%,#4aa9ff,#0f4f91 52%,#0a2035 70%);border:1px solid #4aa9ff;box-shadow:0 0 34px rgba(42,145,244,.22)}
@@ -480,11 +463,13 @@ textarea,input[type=text],input[type=email],input[type=password]{
   .coach-cta{min-width:92%;padding:16px 16px;font-size:20px}.quick-grid{grid-template-columns:repeat(2,1fr);gap:10px}.quick{min-height:108px}
   .dashboard-grid{grid-template-columns:1fr}.card{border-radius:18px;padding:17px}.progress-overview{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:13px}
   .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}
-  .chat-shell{display:block;min-height:calc(100dvh - 245px)}.chat-main{min-height:calc(100dvh - 245px)}
-  .chat-sidebar{display:none;position:absolute;left:12px;right:12px;z-index:15;max-height:60vh;border:1px solid #244b6e;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.55)}
-  .chat-sidebar.open{display:block}.history-toggle{display:inline-flex}
-  .chat{height:calc(100dvh - 365px);min-height:360px;padding:14px 12px 120px}.msg{max-width:90%}
-  .composer-wrap{padding:8px 10px calc(10px + env(safe-area-inset-bottom))}.composer{padding:8px;border-radius:22px}.composer textarea{min-height:72px}.composer .primary{min-width:50px;width:50px;height:50px}
+  #coach .page-head{display:none}
+  #coach.active{margin-top:8px}
+  #coach .chat-card{border-radius:0}
+  .chat-main{height:calc(100dvh - 205px);min-height:500px}
+  .chat{padding:16px 14px 22px}.msg{max-width:90%}.msg.assistant{max-width:100%}
+  .composer-wrap{padding:8px 10px calc(10px + env(safe-area-inset-bottom))}
+  .composer textarea{min-height:66px}
   .voice-grid{grid-template-columns:repeat(2,1fr)}.voice-controls{grid-template-columns:1fr}
   .bottom-nav{
     position:fixed;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;
@@ -592,14 +577,16 @@ const HTML = `<!doctype html>
     </div>
     <div id="textCoach">
       <div class="chat-shell">
+        <div class="chat-backdrop" id="chatBackdrop"></div>
         <aside class="chat-sidebar" id="chatSidebar">
           <div class="chat-sidebar-top"><button id="newChat" class="primary new-chat">＋ New Chat</button></div>
           <div id="chatHistory"></div>
         </aside>
         <div class="chat-main">
           <div class="chat-current-head">
-            <button id="historyToggle" class="secondary history-toggle">☰</button>
+            <button id="historyToggle" class="secondary history-toggle" aria-label="Chat history">☰</button>
             <div class="chat-current-title" id="chatTitle">New chat</div>
+            <button id="quickNewChat" class="secondary quick-new-chat" aria-label="New chat">✎</button>
           </div>
           <div id="chat" class="chat"></div>
           <div class="composer-wrap">
@@ -846,7 +833,11 @@ function renderActiveChat(){
   if(!activeMessages.length){
     $('#chat').innerHTML='<div class="chat-empty"><div><strong>What would you like to work through?</strong><span>Start a new coaching conversation below.</span></div></div>';
   }else{
-    $('#chat').innerHTML=activeMessages.map(m=>'<div class="msg '+m.role+'">'+esc(m.content)+'</div>').join('');
+    $('#chat').innerHTML=activeMessages.map(m=>{
+      if(m.role==='pending')return '<div class="typing" aria-label="JT Coach is responding"><span></span><span></span><span></span></div>';
+      if(m.role==='error')return '<div class="chat-error">'+esc(m.content)+'</div>';
+      return '<div class="msg '+m.role+'">'+esc(m.content)+'</div>';
+    }).join('');
   }
   requestAnimationFrame(()=>scrollChatBottom(false));
 }
@@ -859,13 +850,13 @@ async function openConversation(id){
   activeMessages=await api('/api/conversations/'+id+'/messages');
   chatStickToBottom=true;
   renderConversationList();renderActiveChat();
-  $('#chatSidebar').classList.remove('open');
+  $('#chatSidebar').classList.remove('open');$('#chatBackdrop').classList.remove('show');
 }
 function newConversation(){
   activeConversationId=null;activeMessages=[];chatStickToBottom=true;
   renderConversationList();renderActiveChat();
   $('#message').value='';resizeComposer();
-  $('#chatSidebar').classList.remove('open');
+  $('#chatSidebar').classList.remove('open');$('#chatBackdrop').classList.remove('show');
   setTimeout(()=>$('#message').focus(),50);
 }
 function resizeComposer(){
@@ -882,7 +873,14 @@ $('#message').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('#send').click()}
 });
 $('#newChat').onclick=newConversation;
-$('#historyToggle').onclick=()=>$('#chatSidebar').classList.toggle('open');
+$('#quickNewChat').onclick=newConversation;
+function toggleChatDrawer(force){
+  const open=force===undefined?!$('#chatSidebar').classList.contains('open'):force;
+  $('#chatSidebar').classList.toggle('open',open);
+  $('#chatBackdrop').classList.toggle('show',open);
+}
+$('#historyToggle').onclick=()=>toggleChatDrawer();
+$('#chatBackdrop').onclick=()=>toggleChatDrawer(false);
 
 window.goalProgress=async(id,p)=>{await api('/api/goals/'+id,{method:'PATCH',body:JSON.stringify({progress:Number(p)})});await load()};
 
@@ -895,26 +893,25 @@ $('#energy').oninput=()=>$('#energyVal').textContent=$('#energy').value+' / 5';
 $('#send').onclick=async()=>{
   const m=$('#message').value.trim(); if(!m)return;
   $('#message').value='';resizeComposer();
-  activeMessages.push({role:'user',content:m});
+  activeMessages.push({role:'user',content:m},{role:'pending',content:''});
   renderActiveChat();scrollChatBottom(true);
   $('#send').disabled=true; $('#send').textContent='…';
   try{
     const d=await api('/api/coach',{method:'POST',body:JSON.stringify({message:m,conversationId:activeConversationId})});
-    if(!activeConversationId)activeConversationId=Number(d.conversationId);
-    activeMessages.push({role:'assistant',content:d.reply});
+    activeConversationId=Number(d.conversationId);
+    activeMessages=await api('/api/conversations/'+activeConversationId+'/messages');
     conversations=await api('/api/conversations');
-    renderConversationList();
+    renderConversationList();renderActiveChat();
     $('#chatTitle').textContent=d.title||conversations.find(c=>Number(c.id)===Number(activeConversationId))?.title||'Chat';
-    if(chatStickToBottom)scrollChatBottom(true);
+    scrollChatBottom(true);
     data.usedToday=Math.min(data.limit,(data.usedToday||0)+1);
     $('#use').textContent=data.usedToday+' / '+data.limit;
   }catch(e){
-    activeMessages=activeMessages.filter((x,i)=>!(i===activeMessages.length-1&&x.role==='user'&&x.content===m));
-    renderActiveChat();
-    if(e.message.includes('free messages')){
-      if(confirm("You've completed today's free coaching messages. View JT Coaching Pro?")) setActive('plans')
-    }else alert(e.message)
-  }finally{$('#send').disabled=false;$('#send').textContent='↑'}
+    activeMessages=activeMessages.filter(x=>x.role!=='pending');
+    activeMessages.push({role:'error',content:e.message||'JT Coach could not respond. Please try again.'});
+    renderActiveChat();scrollChatBottom(true);
+    if(e.message.includes('free messages') && confirm("You've completed today's free coaching messages. View JT Coaching Pro?")) setActive('plans');
+  }finally{$('#send').disabled=false;$('#send').textContent='↑';$('#message').focus()}
 };
 
 $('#addGoal').onclick=async()=>{
@@ -1265,13 +1262,17 @@ const server = http.createServer(async (req, res) => {
       if (!process.env.OPENAI_API_KEY) {
         reply = demo(m,u.name);
       } else {
-        const input = [{role:'system',content:coachingInstructions()},...hist,{role:'user',content:m}];
+        const input = [...hist,{role:'user',content:m}];
         const r = await fetch('https://api.openai.com/v1/responses',{
           method:'POST',
           headers:{authorization:'Bearer '+process.env.OPENAI_API_KEY,'content-type':'application/json'},
-          body:JSON.stringify({model:MODEL,input})
+          body:JSON.stringify({model:MODEL,instructions:coachingInstructions(),input})
         });
-        if (!r.ok) return json(res,502,{error:'The coach is temporarily unavailable.'});
+        if (!r.ok) {
+          const detail=await r.text();
+          console.error('JT Coach Responses API error',r.status,detail);
+          return json(res,502,{error:'JT Coach could not connect. Please try again.'});
+        }
         const d = await r.json();
         const parts = Array.isArray(d.output) ? d.output.flatMap(o=>Array.isArray(o.content)?o.content:[]) : [];
         reply = parts.filter(c=>c&&c.type==='output_text'&&typeof c.text==='string').map(c=>c.text).join('\\n').trim()
