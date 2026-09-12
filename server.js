@@ -470,7 +470,12 @@ textarea,input[type=text],input[type=email],input[type=password]{
 .bottom-nav{display:none}
 .badge{font-size:10px;border:1px solid #285173;border-radius:999px;padding:4px 7px;color:#8dc8ff;background:#0d2033}
 .voice-coming{display:flex;gap:8px;align-items:center;justify-content:center}
-.coach-mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px;border-bottom:1px solid #1e3c59;background:#0a1724;margin:0}
+.coach-mode-tabs{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;
+  padding:10px 12px;border-bottom:1px solid #1e3c59;
+  background:#0a1724;margin:0;position:sticky;top:0;z-index:22
+}
+.coach-mode-tabs button{min-height:46px;border-radius:14px;font-weight:800}
 .coach-mode-tabs button.active{border-color:#4baeff;background:#102947;color:#fff}
 
 .voice-panel{padding:18px;background:linear-gradient(180deg,#081522,#07111c)}
@@ -495,8 +500,9 @@ textarea,input[type=text],input[type=email],input[type=password]{
   .dashboard-grid{grid-template-columns:1fr}.card{border-radius:18px;padding:17px}.progress-overview{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:13px}
   .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}
   #coach .page-head{display:none}
-  #coach.active{margin-top:8px}
+  #coach.active{margin-top:0}
   #coach .chat-card{border-radius:0}
+  #coach .coach-mode-tabs{position:sticky;top:0;z-index:40;padding:8px 10px;background:#07111c}
   .chat-main{height:calc(100dvh - 205px);min-height:500px}
   .chat{padding:16px 14px 22px}.msg{max-width:90%}.msg.assistant{max-width:100%}
   .composer-wrap{padding:8px 10px calc(10px + env(safe-area-inset-bottom))}
