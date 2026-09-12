@@ -502,7 +502,7 @@ textarea,input[type=text],input[type=email],input[type=password]{
   #coach .page-head{display:none}
   #coach.active{margin-top:0}
   #coach .chat-card{border-radius:0}
-  #coach .coach-mode-tabs{position:sticky;top:0;z-index:40;padding:8px 10px;background:#07111c}
+  #coach .coach-mode-tabs{position:relative;top:auto;z-index:2;padding:10px;background:#07111c}
   .chat-main{height:calc(100dvh - 205px);min-height:500px}
   .chat{padding:16px 14px 22px}.msg{max-width:90%}.msg.assistant{max-width:100%}
   .composer-wrap{padding:8px 10px calc(10px + env(safe-area-inset-bottom))}
@@ -772,7 +772,7 @@ function setActive(v){
   $$('.section').forEach(x=>x.classList.toggle('active',x.id===v));
   $$('[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
   scrollTo(0,0);
-  if(v==='coach')setTimeout(()=>{scrollChatBottom(false);$('#message')?.focus()},80)
+  if(v==='coach')setTimeout(()=>{scrollTo(0,0);scrollChatBottom(false)},80)
 }
 $$('[data-v]').forEach(b=>b.onclick=()=>setActive(b.dataset.v));
 
@@ -894,7 +894,7 @@ function newConversation(){
   renderConversationList();renderActiveChat();
   $('#message').value='';resizeComposer();
   $('#chatSidebar').classList.remove('open');$('#chatBackdrop').classList.remove('show');
-  setTimeout(()=>$('#message').focus(),50);
+  scrollTo(0,0);
 }
 function resizeComposer(){
   const t=$('#message'); if(!t)return;
