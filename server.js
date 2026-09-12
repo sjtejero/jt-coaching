@@ -9,6 +9,8 @@ const PRO = Number(process.env.PRO_DAILY_MESSAGES || 100);
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1-mini';
 const FREE_VOICE_PREVIEW_SECONDS = Number(process.env.FREE_VOICE_PREVIEW_SECONDS || 180);
 const PRO_VOICE_SESSION_SECONDS = Number(process.env.PRO_VOICE_SESSION_SECONDS || 1800);
+const FOUNDER_EMAIL = String(process.env.JT_FOUNDER_EMAIL || '').trim().toLowerCase();
+const isFounder = u => !!(u && FOUNDER_EMAIL && String(u.email || '').trim().toLowerCase() === FOUNDER_EMAIL);
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
 
@@ -144,7 +146,8 @@ function publicUser(u) {
     plan: u.plan,
     subscriptionStatus: u.subscription_status || null,
     voiceCoach: u.voice_coach || 'james',
-    voicePreviewUsed: !!u.voice_preview_used
+    voicePreviewUsed: !!u.voice_preview_used,
+    founderAccess: isFounder(u)
   };
 }
 async function session(res, id) {
@@ -1402,7 +1405,7 @@ const server = http.createServer(async (req, res) => {
       if (!sdp.startsWith('v=0')) return json(res,400,{error:'Voice connection could not be started.'});
       const coach = voiceCoach(String(b.coach || u.voice_coach || 'james').toLowerCase());
 
-      if (u.plan !== 'pro' && u.voice_preview_used)
+      if (!isFounder(u) && u.plan !== 'pro' && u.voice_preview_used)
         return json(res,402,{error:'Your complimentary Live Coaching preview has already been used. Upgrade to Pro to continue.'});
 
       const instructions = await voiceInstructions(u, coach.key);
