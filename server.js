@@ -800,6 +800,7 @@ const HTML = `<!doctype html>
 const JS = `
 let cfg={},data={},mode='signup',deferred=null,selectedMood=3;
 let selectedVoice='james',voicePc=null,voiceStream=null,voiceTimerId=null,voiceSeconds=0,voiceMuted=false,voiceAudio=null;
+let voiceWakeLock=null,voiceDc=null,voiceResponseActive=false;
 let conversations=[],activeConversationId=null,activeMessages=[],chatStickToBottom=true;
 
 function syncCoachViewport(){
@@ -1077,10 +1078,31 @@ function fmtTime(s){
   s=Math.max(0,Math.floor(s));const m=Math.floor(s/60),x=s%60;
   return String(m).padStart(2,'0')+':'+String(x).padStart(2,'0')
 }
+async function acquireVoiceWakeLock(){
+  if(!('wakeLock' in navigator) || voiceWakeLock)return;
+  try{
+    voiceWakeLock=await navigator.wakeLock.request('screen');
+    voiceWakeLock.addEventListener('release',()=>{voiceWakeLock=null},{once:true});
+  }catch(e){
+    console.warn('Wake lock unavailable',e);
+  }
+}
+async function releaseVoiceWakeLock(){
+  if(!voiceWakeLock)return;
+  try{await voiceWakeLock.release()}catch{}
+  voiceWakeLock=null;
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible' && voicePc && voicePc.connectionState!=='closed')acquireVoiceWakeLock();
+});
+
 function cleanupVoice(){
   if(voiceTimerId){clearInterval(voiceTimerId);voiceTimerId=null}
+  if(voiceDc){try{voiceDc.close()}catch{};voiceDc=null}
   if(voicePc){try{voicePc.close()}catch{};voicePc=null}
   if(voiceStream){voiceStream.getTracks().forEach(t=>t.stop());voiceStream=null}
+  releaseVoiceWakeLock();
+  voiceResponseActive=false;
   voiceMuted=false;
   $('#muteVoice').textContent='Mute Microphone';
 }
@@ -1107,12 +1129,18 @@ $('#startVoice').onclick=async()=>{
   if(!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection){alert('Live voice is not supported in this browser. Try the latest Chrome or Safari.');return}
   const b=$('#startVoice');b.disabled=true;$('#voiceStatus').textContent='Requesting microphone access…';
   try{
-    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    voiceStream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:true,
+      noiseSuppression:true,
+      autoGainControl:true,
+      channelCount:1
+    }});
+    await acquireVoiceWakeLock();
     voicePc=new RTCPeerConnection();
     voiceStream.getTracks().forEach(t=>voicePc.addTrack(t,voiceStream));
     const audio=document.createElement('audio');audio.autoplay=true;
     voicePc.ontrack=e=>{audio.srcObject=e.streams[0]};
-    const dc=voicePc.createDataChannel('oai-events');
+    const dc=voicePc.createDataChannel('oai-events');voiceDc=dc;
     let realtimeSetup=null;
     dc.onopen=()=>{
       if(!realtimeSetup)return;
@@ -1123,17 +1151,59 @@ $('#startVoice').onclick=async()=>{
           model:realtimeSetup.model,
           output_modalities:['audio'],
           instructions:realtimeSetup.instructions,
-          audio:{output:{voice:realtimeSetup.voice}}
+          audio:{
+            input:{
+              turn_detection:{
+                type:'server_vad',
+                threshold:0.5,
+                prefix_padding_ms:350,
+                silence_duration_ms:1800,
+                create_response:true,
+                interrupt_response:true
+              }
+            },
+            output:{voice:realtimeSetup.voice}
+          }
         }
       }));
     };
     dc.onmessage=e=>{
       try{
         const ev=JSON.parse(e.data);
-        if(ev.type==='input_audio_buffer.speech_started')$('#liveStatus').textContent='Listening…';
-        if(ev.type==='response.audio.delta'||ev.type==='response.output_audio.delta')$('#liveStatus').textContent='JT Coach is speaking…';
-        if(ev.type==='response.done')$('#liveStatus').textContent='Listening… speak naturally. You can interrupt the coach.';
-        if(ev.type==='error')$('#liveStatus').textContent='Voice connection error. Please end and try again.';
+
+        if(ev.type==='input_audio_buffer.speech_started'){
+          $('#liveStatus').textContent='Listening…';
+          if(voiceResponseActive && dc.readyState==='open'){
+            try{dc.send(JSON.stringify({type:'response.cancel'}))}catch{}
+          }
+        }
+
+        if(ev.type==='input_audio_buffer.speech_stopped'){
+          $('#liveStatus').textContent='Thinking…';
+        }
+
+        if(ev.type==='response.created'){
+          voiceResponseActive=true;
+          $('#liveStatus').textContent='Thinking…';
+        }
+
+        if(ev.type==='response.audio.delta'||ev.type==='response.output_audio.delta'){
+          voiceResponseActive=true;
+          $('#liveStatus').textContent='JT Coach is speaking…';
+        }
+
+        if(ev.type==='response.done'||ev.type==='response.cancelled'){
+          voiceResponseActive=false;
+          $('#liveStatus').textContent='Listening… take your time.';
+        }
+
+        if(ev.type==='error'){
+          const msg=String(ev.error?.message||'');
+          if(!msg.toLowerCase().includes('cancel')){
+            $('#liveStatus').textContent='Voice connection error. Please end and try again.';
+            console.warn('Realtime event error',ev);
+          }
+        }
       }catch{}
     };
     const offer=await voicePc.createOffer();
@@ -1150,7 +1220,19 @@ $('#startVoice').onclick=async()=>{
           model:realtimeSetup.model,
           output_modalities:['audio'],
           instructions:realtimeSetup.instructions,
-          audio:{output:{voice:realtimeSetup.voice}}
+          audio:{
+            input:{
+              turn_detection:{
+                type:'server_vad',
+                threshold:0.5,
+                prefix_padding_ms:350,
+                silence_duration_ms:1800,
+                create_response:true,
+                interrupt_response:true
+              }
+            },
+            output:{voice:realtimeSetup.voice}
+          }
         }
       }));
     }
@@ -1159,11 +1241,11 @@ $('#startVoice').onclick=async()=>{
     const nm=selectedVoice.charAt(0).toUpperCase()+selectedVoice.slice(1);
     $('#liveCoachName').textContent=nm+' · Live';
     $('#voicePicker').classList.add('hidden');$('#voiceLive').classList.add('show');
-    $('#liveStatus').textContent='Listening… speak naturally. You can interrupt the coach.';
+    $('#liveStatus').textContent='Listening… take your time. Longer pauses are okay.';
     voiceTimerId=setInterval(()=>{
       voiceSeconds-=1;$('#voiceTimer').textContent=fmtTime(voiceSeconds);
-      if(voiceSeconds===30 && data.user.plan!=='pro')$('#liveStatus').textContent='30 seconds remain in your complimentary preview.';
-      if(voiceSeconds<=0)endVoice(data.user.plan!=='pro');
+      if(voiceSeconds===30 && !data.user.founderAccess && data.user.plan!=='pro')$('#liveStatus').textContent='30 seconds remain in your complimentary preview.';
+      if(voiceSeconds<=0)endVoice(!data.user.founderAccess && data.user.plan!=='pro');
     },1000);
   }catch(e){
     cleanupVoice();
