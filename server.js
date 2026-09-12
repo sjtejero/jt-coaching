@@ -315,7 +315,9 @@ const CSS = `
   --warn:#f3c444;--danger:#ef5a61;--shadow:0 16px 50px rgba(0,0,0,.28)
 }
 *{box-sizing:border-box}
-html{background:var(--bg)}
+html{background:var(--bg);overflow-x:hidden}
+body{overflow-x:hidden}
+
 body{
   margin:0;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
   background:
@@ -442,6 +444,35 @@ textarea,input[type=text],input[type=email],input[type=password]{
 .composer textarea:focus{outline:none}
 .composer .primary{min-width:48px;width:48px;height:48px;border-radius:50%;padding:0;font-size:21px;flex:0 0 48px}
 .chat-error{max-width:92%;margin:10px 0;color:#ffb6b6;background:#2a1519;border:1px solid #693039;border-radius:14px;padding:11px 13px}
+
+/* Core app styles restored after chat redesign */
+.list{display:grid;gap:12px}.item{background:#0b1927;border:1px solid #1d3c5c;border-radius:16px;padding:15px}
+.item strong{font-size:17px}.item p{color:#a7b8c8;line-height:1.5}
+.row{display:flex;gap:9px;align-items:center}.row.wrap{flex-wrap:wrap}
+.goal-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.goal-row input[type=range]{margin-top:10px}
+.progress-overview{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stat strong{font-size:27px;display:block;margin-top:4px}.stat small{color:#819cb8}
+.pro-card{border-color:#2b5d8c;background:radial-gradient(500px 200px at 80% 0,rgba(44,133,221,.18),transparent 60%),linear-gradient(180deg,#0e2034,#0a1725)}
+.modal{position:fixed;inset:0;background:rgba(0,5,10,.82);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
+.modal.show{display:flex}.modal .card{max-width:460px;width:100%;margin:0}
+.auth-logo{
+  width:92px;height:92px;border-radius:50%;
+  object-fit:cover;object-position:center;
+  border:0;box-shadow:none;background:transparent;display:block;
+  margin:0 auto 14px;
+  clip-path:circle(38.5% at 50% 50%);
+  transform:scale(1.30)
+}
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.auth-msg{min-height:20px;color:#ff9ca3}
+.footer{text-align:center;color:#6e89a4;font-size:12px;padding:30px 12px}.footer a{color:#8eb6dd}
+.bottom-nav{display:none}
+.badge{font-size:10px;border:1px solid #285173;border-radius:999px;padding:4px 7px;color:#8dc8ff;background:#0d2033}
+.voice-coming{display:flex;gap:8px;align-items:center;justify-content:center}
+.coach-mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px;border-bottom:1px solid #1e3c59;background:#0a1724;margin:0}
+.coach-mode-tabs button.active{border-color:#4baeff;background:#102947;color:#fff}
+
 .voice-panel{padding:18px;background:linear-gradient(180deg,#081522,#07111c)}
 .voice-hero{text-align:center;padding:10px 8px 18px}
 .voice-orb{width:92px;height:92px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;font-size:38px;background:radial-gradient(circle at 35% 30%,#4aa9ff,#0f4f91 52%,#0a2035 70%);border:1px solid #4aa9ff;box-shadow:0 0 34px rgba(42,145,244,.22)}
