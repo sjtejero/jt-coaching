@@ -499,21 +499,60 @@ textarea,input[type=text],input[type=email],input[type=password]{
   .coach-cta{min-width:92%;padding:16px 16px;font-size:20px}.quick-grid{grid-template-columns:repeat(2,1fr);gap:10px}.quick{min-height:108px}
   .dashboard-grid{grid-template-columns:1fr}.card{border-radius:18px;padding:17px}.progress-overview{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:13px}
   .page-head{margin:20px 0 12px}.page-head h2{font-size:32px}
+
+  /* Mobile Coach becomes its own app-like workspace. */
+  body.coach-open{overflow:hidden}
+  body.coach-open .app{padding:0 0 88px;height:var(--coach-vh,100dvh);overflow:hidden}
+  body.coach-open .topbar,body.coach-open .footer{display:none}
   #coach .page-head{display:none}
-  #coach.active{margin-top:0}
-  #coach .chat-card{border-radius:0}
-  #coach .coach-mode-tabs{position:relative;top:auto;z-index:2;padding:10px;background:#07111c}
-  .chat-main{height:calc(100dvh - 205px);min-height:500px}
-  .chat{padding:16px 14px 22px}.msg{max-width:90%}.msg.assistant{max-width:100%}
-  .composer-wrap{padding:8px 10px calc(10px + env(safe-area-inset-bottom))}
-  .composer textarea{min-height:66px}
-  .voice-grid{grid-template-columns:repeat(2,1fr)}.voice-controls{grid-template-columns:1fr}
-  .bottom-nav{
-    position:fixed;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;
-    padding:7px;background:rgba(7,16,27,.95);backdrop-filter:blur(18px);border:1px solid #1e3f60;border-radius:20px;box-shadow:0 14px 45px rgba(0,0,0,.45)
+  #coach.active{
+    display:flex;flex-direction:column;
+    height:calc(var(--coach-vh,100dvh) - 88px);
+    margin:0;overflow:hidden
   }
-  .bottom-nav button{border:0;background:transparent;color:#7890a8;font-size:10px;padding:7px 2px}.bottom-nav button.active{color:#4cabff}.bottom-nav b{font-size:19px;display:block;margin-bottom:2px}
+  #coach .chat-card{
+    flex:1;min-height:0;display:flex;flex-direction:column;
+    border-radius:0;border:0;background:#07111c;overflow:hidden
+  }
+  #coach .coach-mode-tabs{
+    position:relative;top:auto;z-index:40;flex:0 0 auto;
+    display:grid;grid-template-columns:1fr 1fr;gap:8px;
+    padding:10px 12px;background:#07111c;border-bottom:1px solid #173650
+  }
+  #coach .coach-mode-tabs button{min-height:44px}
+  #textCoach{display:flex;flex:1;min-height:0;overflow:hidden}
+  #voiceCoach{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px 14px 24px}
+  .chat-shell{flex:1;min-height:0;height:100%;overflow:hidden}
+  .chat-main{height:100%;min-height:0}
+  .chat-current-head{flex:0 0 52px;height:52px}
+  .chat{min-height:0;padding:14px 14px 18px}
+  .chat-empty{padding:18px;align-items:start;padding-top:12vh}
+  .chat-empty strong{font-size:24px;line-height:1.15}
+  .chat-empty span{font-size:14px}
+  .composer-wrap{
+    flex:0 0 auto;padding:8px 10px 10px;
+    background:#07111c;border-top:1px solid rgba(31,67,102,.45)
+  }
+  .composer{border-radius:24px;padding:7px 7px 7px 12px}
+  .composer textarea{min-height:48px;max-height:140px;padding:8px 4px}
+  .composer .primary{width:46px;height:46px;min-width:46px;flex-basis:46px}
+  .msg{max-width:90%}.msg.assistant{max-width:100%}
+  .voice-grid{grid-template-columns:repeat(2,1fr)}.voice-controls{grid-template-columns:1fr}
+
+  .bottom-nav{
+    position:fixed;z-index:60;display:grid;grid-template-columns:repeat(5,1fr);
+    left:8px;right:8px;bottom:8px;height:72px;
+    padding:7px;background:rgba(7,16,27,.96);backdrop-filter:blur(18px);
+    border:1px solid #1e3f60;border-radius:20px;box-shadow:0 14px 45px rgba(0,0,0,.45)
+  }
+  .bottom-nav button{border:0;background:transparent;color:#7890a8;font-size:10px;padding:7px 2px}
+  .bottom-nav button.active{color:#4cabff}.bottom-nav b{font-size:19px;display:block;margin-bottom:2px}
   .footer{padding-bottom:20px}
+
+  /* While the on-screen keyboard is open, use every available pixel for chat. */
+  body.keyboard-open .bottom-nav{display:none}
+  body.keyboard-open #coach.active{height:var(--coach-vh,100dvh)}
+  body.keyboard-open .composer-wrap{padding-bottom:max(8px,env(safe-area-inset-bottom))}
 }
 `;
 
@@ -759,6 +798,18 @@ const JS = `
 let cfg={},data={},mode='signup',deferred=null,selectedMood=3;
 let selectedVoice='james',voicePc=null,voiceStream=null,voiceTimerId=null,voiceSeconds=0,voiceMuted=false,voiceAudio=null;
 let conversations=[],activeConversationId=null,activeMessages=[],chatStickToBottom=true;
+
+function syncCoachViewport(){
+  const vv=window.visualViewport;
+  const h=Math.round(vv?.height||window.innerHeight);
+  document.documentElement.style.setProperty('--coach-vh',h+'px');
+  const keyboardOpen=(window.innerHeight-h)>120;
+  document.body.classList.toggle('keyboard-open',keyboardOpen&&document.body.classList.contains('coach-open'));
+}
+syncCoachViewport();
+window.addEventListener('resize',syncCoachViewport);
+window.visualViewport?.addEventListener('resize',syncCoachViewport);
+window.visualViewport?.addEventListener('scroll',syncCoachViewport);
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 
 async function api(u,o={}){
@@ -771,8 +822,10 @@ async function api(u,o={}){
 function setActive(v){
   $$('.section').forEach(x=>x.classList.toggle('active',x.id===v));
   $$('[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
+  document.body.classList.toggle('coach-open',v==='coach');
+  if(v!=='coach')document.body.classList.remove('keyboard-open');
   scrollTo(0,0);
-  if(v==='coach')setTimeout(()=>{scrollTo(0,0);scrollChatBottom(false)},80)
+  if(v==='coach')setTimeout(()=>{scrollTo(0,0);scrollChatBottom(false)},60)
 }
 $$('[data-v]').forEach(b=>b.onclick=()=>setActive(b.dataset.v));
 
@@ -868,7 +921,7 @@ function renderActiveChat(){
     ? (conversations.find(c=>Number(c.id)===Number(activeConversationId))?.title||'Chat')
     : 'New chat';
   if(!activeMessages.length){
-    $('#chat').innerHTML='<div class="chat-empty"><div><strong>What would you like to work through?</strong><span>Start a new coaching conversation below.</span></div></div>';
+    $('#chat').innerHTML='<div class="chat-empty"><div><strong>What would you like to work through?</strong><span>Message JT Coach below.</span></div></div>';
   }else{
     $('#chat').innerHTML=activeMessages.map(m=>{
       if(m.role==='pending')return '<div class="typing" aria-label="JT Coach is responding"><span></span><span></span><span></span></div>';
@@ -982,11 +1035,13 @@ $('#upgrade').onclick=async()=>{try{const d=await api('/api/billing/checkout',{m
 
 $('#textMode').onclick=()=>{
   $('#textMode').classList.add('active');$('#voiceMode').classList.remove('active');
-  $('#textCoach').style.display='block';$('#voiceCoach').style.display='none'
+  $('#textCoach').style.display='flex';$('#voiceCoach').style.display='none';
+  requestAnimationFrame(()=>scrollChatBottom(false))
 };
 $('#voiceMode').onclick=()=>{
   $('#voiceMode').classList.add('active');$('#textMode').classList.remove('active');
-  $('#textCoach').style.display='none';$('#voiceCoach').style.display='block'
+  $('#textCoach').style.display='none';$('#voiceCoach').style.display='block';
+  $('#message')?.blur()
 };
 
 $$('.voice-option').forEach(b=>b.onclick=()=>{
