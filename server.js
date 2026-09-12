@@ -862,8 +862,12 @@ function render(){
   $('#checkinCount').textContent=data.checkins.length;
   selectedVoice=(data.user.voiceCoach||selectedVoice||'james');
   $$('.voice-option').forEach(b=>b.classList.toggle('selected',b.dataset.coach===selectedVoice));
-  if(data.user.plan==='pro'){
+  if(data.user.founderAccess){
+    $('#voiceOffer').textContent='Founder testing access enabled.';
+    $('#startVoice').textContent='Start Live Voice';
+  }else if(data.user.plan==='pro'){
     $('#voiceOffer').textContent='Live voice coaching is included with Pro, subject to fair-use limits.';
+    $('#startVoice').textContent='Start Live Voice';
   }else if(data.user.voicePreviewUsed){
     $('#voiceOffer').textContent='Your complimentary live voice preview has been used. Upgrade to Pro to continue with live voice.';
     $('#startVoice').textContent='View JT Coaching Pro';
@@ -1099,7 +1103,7 @@ $('#muteVoice').onclick=()=>{
 };
 
 $('#startVoice').onclick=async()=>{
-  if(data.user.plan!=='pro' && data.user.voicePreviewUsed){setActive('plans');return}
+  if(!data.user.founderAccess && data.user.plan!=='pro' && data.user.voicePreviewUsed){setActive('plans');return}
   if(!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection){alert('Live voice is not supported in this browser. Try the latest Chrome or Safari.');return}
   const b=$('#startVoice');b.disabled=true;$('#voiceStatus').textContent='Requesting microphone access…';
   try{
@@ -1427,16 +1431,20 @@ const server = http.createServer(async (req, res) => {
         return json(res,502,{error:'JT Coach Live is temporarily unavailable.'});
       }
       const answerSdp = await r.text();
-      await q('UPDATE users SET voice_coach=$1, voice_preview_used=CASE WHEN plan=$2 THEN TRUE ELSE voice_preview_used END WHERE id=$3',
-        [coach.key,'free',u.id]);
+      if (isFounder(u)) {
+        await q('UPDATE users SET voice_coach=$1 WHERE id=$2',[coach.key,u.id]);
+      } else {
+        await q('UPDATE users SET voice_coach=$1, voice_preview_used=CASE WHEN plan=$2 THEN TRUE ELSE voice_preview_used END WHERE id=$3',
+          [coach.key,'free',u.id]);
+      }
       return json(res,200,{
         sdp:answerSdp,
         coach:coach.key,
         voice:coach.id,
         instructions,
         model:REALTIME_MODEL,
-        maxSeconds:u.plan === 'pro' ? PRO_VOICE_SESSION_SECONDS : FREE_VOICE_PREVIEW_SECONDS,
-        preview:u.plan !== 'pro'
+        maxSeconds:(u.plan === 'pro' || isFounder(u)) ? PRO_VOICE_SESSION_SECONDS : FREE_VOICE_PREVIEW_SECONDS,
+        preview:!isFounder(u) && u.plan !== 'pro'
       });
     }
 
